@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, development]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm turbo build lint typecheck test
+        env:
+          SKIP_ENV_VALIDATION: 'true'
+
+  check-branch:
+    if: github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce only development can PR into main
+        run: |
+          if [ "${{ github.head_ref }}" != "development" ]; then
+            echo "Only the development branch can create PRs into main."
+            exit 1
+          fi

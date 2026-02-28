@@ -1,0 +1,28 @@
+{
+  "name": "@gitagrip/eslint-config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./base": {
+      "types": "./index.d.ts",
+      "default": "./base.js"
+    },
+    "./next": {
+      "types": "./index.d.ts",
+      "default": "./next.js"
+    },
+    "./node": {
+      "types": "./index.d.ts",
+      "default": "./node.js"
+    }
+  },
+  "dependencies": {
+    "@eslint/js": "^9.0.0",
+    "typescript-eslint": "^8.0.0",
+    "eslint-config-prettier": "^10.0.0"
+  },
+  "peerDependencies": {
+    "eslint": "^9.0.0"
+  }
+}

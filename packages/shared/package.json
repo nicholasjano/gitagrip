@@ -1,0 +1,20 @@
+{
+  "name": "@gitagrip/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas": "./src/schemas.ts"
+  },
+  "devDependencies": {
+    "@gitagrip/eslint-config": "workspace:*",
+    "@gitagrip/typescript-config": "workspace:*",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0"
+  }
+}
