@@ -9,25 +9,33 @@
     "start": "node dist/index.js",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"No tests yet\""
+    "test": "echo \"No tests yet\"",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@gitagrip/shared": "workspace:*",
-    "express": "^5.0.0",
     "bullmq": "^5.0.0",
-    "ioredis": "^5.0.0",
+    "cors": "^2.8.5",
+    "drizzle-orm": "^0.45.1",
+    "express": "^5.0.0",
     "helmet": "^8.0.0",
-    "cors": "^2.8.5"
+    "ioredis": "^5.0.0",
+    "pg": "^8.19.0"
   },
   "devDependencies": {
-    "@gitagrip/typescript-config": "workspace:*",
     "@gitagrip/eslint-config": "workspace:*",
-    "@types/express": "^5.0.0",
+    "@gitagrip/typescript-config": "workspace:*",
     "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
-    "tsx": "^4.0.0",
+    "@types/pg": "^8.18.0",
+    "drizzle-kit": "^0.31.9",
+    "eslint": "^9.0.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0",
-    "eslint": "^9.0.0"
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
   }
 }

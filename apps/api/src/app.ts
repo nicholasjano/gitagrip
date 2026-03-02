@@ -1,6 +1,7 @@
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
+import { pool } from './db/index.js';
 
 const app: Express = express();
 
@@ -17,14 +18,29 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-app.get('/health/ready', (_req, res) => {
-  // TODO: Add real health checks for database and redis
-  res.json({
-    status: 'ok',
-    services: {
-      database: 'ok',
-      redis: 'ok',
-    },
+app.get('/health/ready', async (_req, res) => {
+  const services: Record<string, 'ok' | 'error'> = {
+    database: 'error',
+    redis: 'ok', // TODO: Add real Redis health check
+  };
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('SELECT 1');
+      services.database = 'ok';
+    } finally {
+      client.release();
+    }
+  } catch {
+    // services.database remains 'error'
+  }
+
+  const allHealthy = Object.values(services).every((s) => s === 'ok');
+
+  res.status(allHealthy ? 200 : 503).json({
+    status: allHealthy ? 'ok' : 'degraded',
+    services,
   });
 });
 
