@@ -14,7 +14,7 @@
   "devDependencies": {
     "@gitagrip/eslint-config": "workspace:*",
     "@gitagrip/typescript-config": "workspace:*",
-    "eslint": "^9.0.0",
+    "eslint": "^10.0.0",
     "typescript": "^5.7.0"
   }
 }

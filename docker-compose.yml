@@ -16,12 +16,11 @@ services:
       dockerfile: docker/api.Dockerfile
     ports:
       - '4000:4000'
+    env_file: .env
     environment:
       - NODE_ENV=production
-      - PORT=4000
       - DATABASE_URL=postgresql://gitagrip:gitagrip@postgres:5432/gitagrip
       - REDIS_URL=redis://redis:6379
-      - CORS_ORIGIN=http://localhost:3000
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,7 +51,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:8
+    image: redis:8.0.5
     ports:
       - '6379:6379'
     volumes:
