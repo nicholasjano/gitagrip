@@ -1,7 +1,7 @@
 {
   "name": "gitagrip",
   "private": true,
-  "packageManager": "pnpm@10.7.1",
+  "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017",
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
@@ -17,9 +17,9 @@
     "@commitlint/cli": "^20.0.0",
     "@commitlint/config-conventional": "^20.0.0",
     "@gitagrip/eslint-config": "workspace:*",
-    "eslint": "^9.0.0",
+    "eslint": "^10.0.0",
     "husky": "^9.0.0",
-    "lint-staged": "^15.0.0",
+    "lint-staged": "^16.0.0",
     "prettier": "^3.4.0",
     "turbo": "^2.7.0"
   },
