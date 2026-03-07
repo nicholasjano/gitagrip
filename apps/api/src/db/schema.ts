@@ -62,7 +62,7 @@ export const users = pgTable(
       .primaryKey()
       .default(sql`uuidv7()`),
     githubId: bigint({ mode: 'number' }).unique().notNull(),
-    username: varchar().unique().notNull(),
+    username: varchar().notNull(),
     email: varchar(),
     avatarUrl: varchar(),
     accessToken: text().notNull(),
@@ -72,7 +72,12 @@ export const users = pgTable(
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
-  (table) => [check('users_theme_check', sql`${table.theme} IN ('dark', 'light')`)],
+  (table) => [
+    check('users_theme_check', sql`${table.theme} IN ('dark', 'light')`),
+    uniqueIndex('idx_users_username_active')
+      .on(table.username)
+      .where(sql`deleted_at IS NULL`),
+  ],
 );
 
 export const scanBatches = pgTable(
