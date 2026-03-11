@@ -33,6 +33,22 @@ services:
       retries: 3
     restart: unless-stopped
 
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: node dist/worker/index.js
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+    restart: unless-stopped
+
   postgres:
     image: postgres:18
     ports:
