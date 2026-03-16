@@ -1,4 +1,6 @@
-// creates worker instances for the scan and batch processors
+// creates worker instances for the scan and batch processors (separate from express app)
+
+// TODO: add stalledInterval and maxStalledCount config once scan routes are built
 
 import { Worker } from 'bullmq';
 import { bullRedis } from '../db/bull-redis.js';

@@ -1,3 +1,5 @@
+// authentication middleware for the express app
+
 import { jwtVerify } from 'jose';
 import type { Request, Response, NextFunction } from 'express';
 import { eq, and, isNull } from 'drizzle-orm';

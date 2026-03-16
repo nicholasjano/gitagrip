@@ -1,3 +1,5 @@
+// builds the express app
+
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';

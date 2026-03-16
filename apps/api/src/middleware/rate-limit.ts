@@ -1,3 +1,5 @@
+// rate limiting middleware for the express app
+
 import rateLimit from 'express-rate-limit';
 
 const skipInDev = process.env.NODE_ENV !== 'production';
