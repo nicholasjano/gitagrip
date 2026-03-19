@@ -15,9 +15,12 @@ export default async function batchProcessor(job: Job<BatchJobData>) {
   console.log(`Processing batch ${batchId}`);
 
   try {
-    // get all processed child values
+    // get all processed child values (succeeded and failed)
     const childrenValues = await job.getChildrenValues();
-    console.log(`Batch ${batchId}: ${Object.keys(childrenValues).length} children processed`);
+    const failedChildrenValues = await job.getFailedChildrenValues();
+    console.log(
+      `Batch ${batchId}: ${Object.keys(childrenValues).length} succeeded, ${Object.keys(failedChildrenValues).length} failed`,
+    );
 
     // get all scans for this batch and derive counters from postgres
     const batchScans = await db

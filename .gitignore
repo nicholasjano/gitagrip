@@ -143,3 +143,11 @@ vite.config.ts.timestamp-*
 
 # Turborepo
 .turbo
+
+# PDR
+PDR.md
+
+# Testing
+apps/api/src/__tests__/
+apps/api/vitest.config.ts
+apps/api/tsconfig.test.json

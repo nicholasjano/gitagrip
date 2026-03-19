@@ -1,10 +1,11 @@
 // creates worker instances for the scan and batch processors (separate from express app)
 
-// TODO: add stalledInterval and maxStalledCount config once scan routes are built
-
-import { Worker } from 'bullmq';
+import { Worker, Job } from 'bullmq';
+import { eq, sql } from 'drizzle-orm';
 import { bullRedis } from '../db/bull-redis.js';
 import { db } from '../db/index.js';
+import { scans, scanBatches } from '../db/schema.js';
+import { scanQueue } from '../queue/scan-queue.js';
 
 // Determine file extension based on environment
 const isProd = process.env.NODE_ENV === 'production';
@@ -20,7 +21,7 @@ const scanWorker = new Worker(
     lockDuration: 300000,
     useWorkerThreads: true,
     stalledInterval: 60000,
-    maxStalledCount: 1,
+    maxStalledCount: 2,
   },
 );
 
@@ -34,17 +35,49 @@ const batchWorker = new Worker(
     lockDuration: 300000,
     useWorkerThreads: true,
     stalledInterval: 60000,
-    maxStalledCount: 1,
+    maxStalledCount: 2,
   },
 );
 
-// Logging
-scanWorker.on('completed', (job) => {
+// Logging + side effects
+scanWorker.on('completed', async (job) => {
   console.log(`Scan job ${job.id} completed`);
+  // increment batch progress counter if this scan belongs to a batch
+  try {
+    const [scan] = await db
+      .select({ batchId: scans.batchId })
+      .from(scans)
+      .where(eq(scans.id, job.data.scanId))
+      .limit(1);
+    if (scan?.batchId) {
+      await db
+        .update(scanBatches)
+        .set({ completedRepos: sql`${scanBatches.completedRepos} + 1`, updatedAt: sql`NOW()` })
+        .where(eq(scanBatches.id, scan.batchId));
+    }
+  } catch (err) {
+    console.error(`Failed to increment completed_repos for scan job ${job.id}:`, err);
+  }
 });
 
 scanWorker.on('failed', (job, err) => {
   console.error(`Scan job ${job?.id} failed:`, err.message);
+});
+
+scanWorker.on('stalled', async (jobId) => {
+  console.warn(`Scan job ${jobId} stalled`);
+  try {
+    const job = await Job.fromId(scanQueue, jobId);
+    if (!job?.data?.scanId) return;
+    await db
+      .update(scans)
+      .set({ status: 'failed', errorMessage: 'Job stalled', updatedAt: sql`NOW()` })
+      .where(
+        sql`${scans.id} = ${job.data.scanId} AND ${scans.status} IN ('queued', 'in_progress')`,
+      );
+  } catch (err) {
+    console.error(`Failed to update stalled scan job ${jobId}:`, err);
+  }
 });
 
 batchWorker.on('completed', (job) => {
