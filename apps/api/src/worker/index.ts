@@ -19,6 +19,8 @@ const scanWorker = new Worker(
     concurrency: 3,
     lockDuration: 300000,
     useWorkerThreads: true,
+    stalledInterval: 60000,
+    maxStalledCount: 1,
   },
 );
 
@@ -31,6 +33,8 @@ const batchWorker = new Worker(
     concurrency: 3,
     lockDuration: 300000,
     useWorkerThreads: true,
+    stalledInterval: 60000,
+    maxStalledCount: 1,
   },
 );
 

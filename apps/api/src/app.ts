@@ -7,6 +7,7 @@ import cookieParser from 'cookie-parser';
 import { pool } from './db/index.js';
 import { redis } from './db/redis.js';
 import authRouter from './routes/auth.js';
+import scanRouter, { batchRouter } from './routes/scans.js';
 
 const app: Express = express();
 
@@ -31,6 +32,8 @@ app.use(express.json({ limit: '10kb' }));
 app.use(cookieParser());
 
 app.use('/auth', authRouter);
+app.use('/scans', scanRouter);
+app.use('/batches', batchRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });

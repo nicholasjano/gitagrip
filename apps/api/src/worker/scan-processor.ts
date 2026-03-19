@@ -51,7 +51,7 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       .update(scans)
       .set({
         status: 'in_progress',
-        updated_at: sql`NOW()`,
+        updatedAt: sql`NOW()`,
       })
       .where(sql`${scans.id} = ${scanId} AND ${scans.status} = 'queued'`)
       .returning({ id: scans.id });
@@ -73,8 +73,8 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
         .update(scans)
         .set({
           status: 'timeout',
-          error_message: 'Scan exceeded 5 minute timeout',
-          updated_at: sql`NOW()`,
+          errorMessage: 'Scan exceeded 5 minute timeout',
+          updatedAt: sql`NOW()`,
         })
         .where(eq(scans.id, scanId));
       throw new UnrecoverableError('Job timeout during processing');
@@ -83,7 +83,7 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     // Generate mock scores
     const overallScore = randomInt(40, 95);
     const categoryScores = SCAN_CATEGORY_NAMES.map((category) => ({
-      scan_id: scanId,
+      scanId,
       category,
       score: randomInt(30, 100),
       message: `Mock scan result for ${category}`,
@@ -98,8 +98,8 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       .set({
         status: 'completed',
         score: overallScore,
-        completed_at: sql`NOW()`,
-        updated_at: sql`NOW()`,
+        completedAt: sql`NOW()`,
+        updatedAt: sql`NOW()`,
       })
       .where(eq(scans.id, scanId));
 
@@ -116,8 +116,8 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       .update(scans)
       .set({
         status: 'failed',
-        error_message: errorMessage,
-        updated_at: sql`NOW()`,
+        errorMessage,
+        updatedAt: sql`NOW()`,
       })
       .where(eq(scans.id, scanId));
 
