@@ -2,8 +2,8 @@
 
 import type { Job } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { scanBatches, scans } from '../db/schema.ts';
+import { db } from '../db/index.js';
+import { scanBatches, scans } from '../db/schema.js';
 
 interface BatchJobData {
   batchId: string;
@@ -74,6 +74,7 @@ export default async function batchProcessor(job: Job<BatchJobData>) {
       .update(scanBatches)
       .set({
         status: 'failed',
+        errorMessage,
         updatedAt: sql`NOW()`,
       })
       .where(eq(scanBatches.id, batchId));

@@ -1,7 +1,7 @@
 // scan submission business logic
 // sits between routes and the queue — routes stay thin, logic stays testable
 
-import { Job } from 'bullmq';
+import { Job, type FlowChildJob } from 'bullmq';
 import { eq, sql, desc } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scans, scanBatches, type ScanSelect } from '../db/schema.js';
@@ -204,6 +204,9 @@ export async function submitSingleScan(
         })
         .returning({ id: scans.id });
 
+      // check if scan row is null before adding to queue
+      if (!scan) throw new Error('failed to insert scan row');
+
       // enqueue with deduplication — if a job for this repo is already in the
       // queue (e.g. from a parallel request that snuck past the lock somehow),
       // BullMQ will return the existing job instead of creating a duplicate
@@ -216,6 +219,7 @@ export async function submitSingleScan(
           githubRepoId: repo.id,
         },
         {
+          jobId: `repo-scan-${repo.id}`,
           deduplication: { id: `repo-scan-${repo.id}` },
         },
       );
@@ -282,6 +286,8 @@ export async function submitBatchScan(
         })
         .returning({ id: scanBatches.id });
 
+      if (!batch) throw new Error('failed to insert batch row');
+
       // insert all scan rows — we need their IDs to build the BullMQ child job data
       const scanRows = await tx
         .insert(scans)
@@ -325,8 +331,9 @@ export async function submitBatchScan(
             githubRepoId: scan.githubRepoId,
           },
           opts: {
+            jobId: `repo-scan-${scan.githubRepoId}`,
             deduplication: { id: `repo-scan-${scan.githubRepoId}` },
-          },
+          } as FlowChildJob['opts'],
         })),
       });
 

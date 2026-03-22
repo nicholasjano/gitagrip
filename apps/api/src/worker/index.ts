@@ -7,7 +7,7 @@ import { db } from '../db/index.js';
 import { scans, scanBatches } from '../db/schema.js';
 import { scanQueue } from '../queue/scan-queue.js';
 
-// Determine file extension based on environment
+// determine file extension based on environment
 const isProd = process.env.NODE_ENV === 'production';
 const ext = isProd ? '.js' : '.ts';
 

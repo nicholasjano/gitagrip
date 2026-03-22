@@ -7,8 +7,8 @@
 import type { Job } from 'bullmq';
 import { UnrecoverableError } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
-import { db } from '../db/index.ts';
-import { scans, scanCategories, SCAN_CATEGORY_NAMES } from '../db/schema.ts';
+import { db } from '../db/index.js';
+import { scans, scanCategories, SCAN_CATEGORY_NAMES } from '../db/schema.js';
 
 interface ScanJobData {
   scanId: string;
@@ -85,7 +85,7 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     const categoryScores = SCAN_CATEGORY_NAMES.map((category) => ({
       scanId,
       category,
-      score: randomInt(30, 100),
+      score: randomInt(30, 100).toString(),
       message: `Mock scan result for ${category}`,
     }));
 

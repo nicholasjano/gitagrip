@@ -1,7 +1,7 @@
 // scan submission and retrieval routes
 // routes stay thin — all business logic lives in scan-service.ts
 
-import { Router } from 'express';
+import { Router, type IRouter } from 'express';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scans, scanCategories, scanBatches } from '../db/schema.js';
@@ -11,9 +11,15 @@ import {
   batchSubmitLimiter,
   scanStatusLimiter,
 } from '../middleware/scan-rate-limit.js';
-import { submitSingleScan, submitBatchScan, getScanStatus } from '../services/scan-service.js';
+import {
+  submitSingleScan,
+  submitBatchScan,
+  getScanStatus,
+  type SingleScanResult,
+  type BatchScanResult,
+} from '../services/scan-service.js';
 
-const router = Router();
+const router: IRouter = Router();
 
 // ─── POST /scans ──────────────────────────────────────────────────────────────
 // submit a single repo scan.
@@ -38,7 +44,8 @@ router.post('/', requireAuth, scanSubmitLimiter, async (req, res) => {
       return;
     }
 
-    res.status(202).json({ scanId: result.scanId, status: 'queued' });
+    const scan = result as SingleScanResult;
+    res.status(202).json({ scanId: scan.scanId, status: 'queued' });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to submit scan';
     const pgErr = err as {
@@ -95,10 +102,11 @@ router.post('/batch', requireAuth, batchSubmitLimiter, async (req, res) => {
       return;
     }
 
+    const batch = result as BatchScanResult;
     res.status(202).json({
-      batchId: result.batchId,
+      batchId: batch.batchId,
       status: 'queued',
-      totalRepos: result.totalRepos,
+      totalRepos: batch.totalRepos,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to submit batch scan';
@@ -124,7 +132,7 @@ router.post('/batch', requireAuth, batchSubmitLimiter, async (req, res) => {
 // public — scan results are visible without auth.
 
 router.get('/:id', optionalAuth, async (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id as string;
 
   try {
     const [scan] = await db.select().from(scans).where(eq(scans.id, id)).limit(1);
@@ -148,7 +156,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 // checks Postgres first, falls back to BullMQ job state for in-flight scans.
 
 router.get('/:id/status', optionalAuth, scanStatusLimiter, async (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id as string;
 
   try {
     const result = await getScanStatus(id);
@@ -173,10 +181,10 @@ router.get('/:id/status', optionalAuth, scanStatusLimiter, async (req, res) => {
 // batch status with all child scan summaries.
 // note: registered under /batches in app.ts, not /scans — different router mount point.
 
-export const batchRouter = Router();
+export const batchRouter: IRouter = Router();
 
 batchRouter.get('/:id', requireAuth, async (req, res) => {
-  const { id } = req.params;
+  const id = req.params.id as string;
 
   try {
     const [batch] = await db.select().from(scanBatches).where(eq(scanBatches.id, id)).limit(1);

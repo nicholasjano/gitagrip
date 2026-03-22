@@ -151,3 +151,6 @@ PDR.md
 apps/api/src/__tests__/
 apps/api/vitest.config.ts
 apps/api/tsconfig.test.json
+
+# Docs
+BACKEND_DFD.md

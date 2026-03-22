@@ -41,12 +41,11 @@ services:
     depends_on:
       - postgres
       - redis
+    env_file: .env
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=postgresql://gitagrip:gitagrip@postgres:5432/gitagrip
       - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     restart: unless-stopped
 
   postgres:

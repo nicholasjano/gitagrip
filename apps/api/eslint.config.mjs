@@ -1,3 +1,4 @@
 import nodeConfig from '@gitagrip/eslint-config/node';
 
-export default nodeConfig;
+/** @type {import('eslint').Linter.Config[]} */
+export default [...nodeConfig];

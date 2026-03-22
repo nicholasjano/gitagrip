@@ -1,7 +1,7 @@
 // individual repo scan job queue
 
 import { Queue } from 'bullmq';
-import { bullRedis } from '../db/bull-redis';
+import { bullRedis } from '../db/bull-redis.js';
 
 export const scanQueue = new Queue('github-scans', {
   connection: bullRedis,
