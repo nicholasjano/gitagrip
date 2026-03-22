@@ -33,6 +33,23 @@ services:
       retries: 3
     restart: unless-stopped
 
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command: node dist/worker/index.js
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://gitagrip:gitagrip@postgres:5432/gitagrip
+      - REDIS_URL=redis://redis:6379
+    restart: unless-stopped
+
   postgres:
     image: postgres:18
     ports:

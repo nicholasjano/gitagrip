@@ -1,3 +1,5 @@
+// creates the database connection (5), allows exporting the database connection to the app and worker
+
 import { drizzle } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 import * as schema from './schema.js';
