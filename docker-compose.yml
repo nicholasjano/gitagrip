@@ -39,8 +39,10 @@ services:
       dockerfile: docker/api.Dockerfile
     command: node dist/worker/index.js
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file: .env
     environment:
       - NODE_ENV=production

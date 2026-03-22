@@ -1,7 +1,7 @@
 // scan submission business logic
 // sits between routes and the queue — routes stay thin, logic stays testable
 
-import { Job, type FlowChildJob } from 'bullmq';
+import { Job } from 'bullmq';
 import { eq, sql, desc } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scans, scanBatches, type ScanSelect } from '../db/schema.js';
@@ -138,14 +138,17 @@ async function fetchGitHubRepos(
 // will queue up. the second one waits until the first commits/rolls back.
 // we use this to prevent two simultaneous scan submissions for the same repo
 // from both passing the cooldown check before either inserts the scan row.
+//
+// uses two-argument form for a 64-bit keyspace (namespace + key).
+// single-argument hashtext() only gives 32 bits, which hits birthday-paradox
+// collisions at ~100K distinct keys.
 async function withAdvisoryLock<T>(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  lockKey: string,
+  namespace: string,
+  key: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  // hashtext() is a postgres built-in that turns a string into a 32-bit int
-  // advisory locks take an integer key, not a string
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${namespace}), hashtext(${key}))`);
   return fn();
 }
 
@@ -164,8 +167,8 @@ export async function submitSingleScan(
   // while waiting on a network call to GitHub
   const repo = await fetchGitHubRepo(repoOwner, repoName, accessToken);
 
-  return db.transaction(async (tx) => {
-    return withAdvisoryLock(tx, `scan_cooldown_${repo.id}`, async () => {
+  const txResult = await db.transaction(async (tx) => {
+    return withAdvisoryLock(tx, 'scan_cooldown', String(repo.id), async () => {
       // check if the last terminal scan for this repo is within the cooldown window
       const [lastScan] = await tx
         .select({ updatedAt: scans.updatedAt })
@@ -204,29 +207,33 @@ export async function submitSingleScan(
         })
         .returning({ id: scans.id });
 
-      // check if scan row is null before adding to queue
       if (!scan) throw new Error('failed to insert scan row');
 
-      // enqueue with deduplication — if a job for this repo is already in the
-      // queue (e.g. from a parallel request that snuck past the lock somehow),
-      // BullMQ will return the existing job instead of creating a duplicate
-      const job = await scanQueue.add(
-        'scan-repo',
-        {
-          scanId: scan.id,
-          repoOwner: repo.owner.login,
-          repoName: repo.name,
-          githubRepoId: repo.id,
-        },
-        {
-          jobId: `repo-scan-${repo.id}`,
-          deduplication: { id: `repo-scan-${repo.id}` },
-        },
-      );
-
-      return { scanId: scan.id, jobId: job.id! };
+      return { scanId: scan.id, repo };
     });
   });
+
+  // cooldown hit — return early without touching Redis
+  if ('type' in txResult && txResult.type === 'cooldown') {
+    return txResult;
+  }
+
+  // enqueue AFTER the transaction commits so a rollback can't orphan a Redis job.
+  // jobId provides de-facto deduplication — BullMQ won't create a new job if
+  // one with the same ID already exists.
+  const { scanId, repo: txRepo } = txResult;
+  const job = await scanQueue.add(
+    'scan-repo',
+    {
+      scanId,
+      repoOwner: txRepo.owner.login,
+      repoName: txRepo.name,
+      githubRepoId: txRepo.id,
+    },
+    { jobId: `repo-scan-${txRepo.id}` },
+  );
+
+  return { scanId, jobId: job.id! };
 }
 
 // ─── submitBatchScan ──────────────────────────────────────────────────────────
@@ -249,8 +256,8 @@ export async function submitBatchScan(
     throw new Error(`No repositories found for ${type} "${target}"`);
   }
 
-  return db.transaction(async (tx) => {
-    return withAdvisoryLock(tx, `batch_cooldown_${type}_${target}`, async () => {
+  const txResult = await db.transaction(async (tx) => {
+    return withAdvisoryLock(tx, 'batch_cooldown', `${type}_${target}`, async () => {
       // batch cooldown scales with repo count:
       // scanning 100 repos locks that target for 300 hours (3h × 100).
       // this prevents hammering GitHub API and the scan queue with repeated bulk submissions.
@@ -314,32 +321,37 @@ export async function submitBatchScan(
           repoName: scans.repoName,
         });
 
-      // flowProducer.add() creates the parent job + all child jobs atomically.
-      // the parent job sits in 'waiting-children' state until every child completes,
-      // then BullMQ automatically moves it to 'waiting' so batch-processor can run.
-      await flowProducer.add({
-        name: 'batch-complete',
-        queueName: 'scan-batches',
-        data: { batchId: batch.id },
-        children: scanRows.map((scan) => ({
-          name: 'scan-repo',
-          queueName: 'github-scans',
-          data: {
-            scanId: scan.id,
-            repoOwner: scan.repoOwner,
-            repoName: scan.repoName,
-            githubRepoId: scan.githubRepoId,
-          },
-          opts: {
-            jobId: `repo-scan-${scan.githubRepoId}`,
-            deduplication: { id: `repo-scan-${scan.githubRepoId}` },
-          } as FlowChildJob['opts'],
-        })),
-      });
-
-      return { batchId: batch.id, totalRepos: repos.length };
+      return { batchId: batch.id, totalRepos: repos.length, scanRows };
     });
   });
+
+  // cooldown hit — return early without touching Redis
+  if ('type' in txResult && txResult.type === 'cooldown') {
+    return txResult;
+  }
+
+  // enqueue AFTER the transaction commits so a rollback can't orphan Redis jobs.
+  // flowProducer.add() creates the parent + all children atomically in Redis.
+  // jobId on each child provides de-facto deduplication.
+  const { batchId, totalRepos, scanRows } = txResult;
+  await flowProducer.add({
+    name: 'batch-complete',
+    queueName: 'scan-batches',
+    data: { batchId },
+    children: scanRows.map((scan) => ({
+      name: 'scan-repo',
+      queueName: 'github-scans',
+      data: {
+        scanId: scan.id,
+        repoOwner: scan.repoOwner,
+        repoName: scan.repoName,
+        githubRepoId: scan.githubRepoId,
+      },
+      opts: { jobId: `repo-scan-${scan.githubRepoId}` },
+    })),
+  });
+
+  return { batchId, totalRepos };
 }
 
 // ─── getScanStatus ────────────────────────────────────────────────────────────

@@ -21,6 +21,8 @@ import {
 
 const router: IRouter = Router();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ─── POST /scans ──────────────────────────────────────────────────────────────
 // submit a single repo scan.
 // fetches live repo metadata from GitHub, inserts scan row, enqueues job.
@@ -133,6 +135,10 @@ router.post('/batch', requireAuth, batchSubmitLimiter, async (req, res) => {
 
 router.get('/:id', optionalAuth, async (req, res) => {
   const id = req.params.id as string;
+  if (!UUID_RE.test(id)) {
+    res.status(400).json({ error: 'Invalid scan ID format' });
+    return;
+  }
 
   try {
     const [scan] = await db.select().from(scans).where(eq(scans.id, id)).limit(1);
@@ -157,6 +163,10 @@ router.get('/:id', optionalAuth, async (req, res) => {
 
 router.get('/:id/status', optionalAuth, scanStatusLimiter, async (req, res) => {
   const id = req.params.id as string;
+  if (!UUID_RE.test(id)) {
+    res.status(400).json({ error: 'Invalid scan ID format' });
+    return;
+  }
 
   try {
     const result = await getScanStatus(id);
@@ -185,6 +195,10 @@ export const batchRouter: IRouter = Router();
 
 batchRouter.get('/:id', requireAuth, async (req, res) => {
   const id = req.params.id as string;
+  if (!UUID_RE.test(id)) {
+    res.status(400).json({ error: 'Invalid batch ID format' });
+    return;
+  }
 
   try {
     const [batch] = await db.select().from(scanBatches).where(eq(scanBatches.id, id)).limit(1);
