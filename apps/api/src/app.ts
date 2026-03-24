@@ -4,12 +4,14 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import fs from 'fs/promises';
 import { pool } from './db/index.js';
 import { redis } from './db/redis.js';
 import authRouter from './routes/auth.js';
 import scanRouter, { batchRouter } from './routes/scans.js';
 
 const app: Express = express();
+const MIN_READY_DISK_BYTES = 5 * 1024 * 1024 * 1024;
 
 app.set('trust proxy', 1);
 
@@ -43,7 +45,9 @@ app.get('/health/ready', async (_req, res) => {
   const services: Record<string, 'ok' | 'error'> = {
     database: 'error',
     redis: 'error',
+    disk: 'error',
   };
+  let diskFreeMb = 0;
 
   try {
     const client = await pool.connect();
@@ -64,11 +68,26 @@ app.get('/health/ready', async (_req, res) => {
     // services.redis remains 'error'
   }
 
+  try {
+    const { bavail, bsize } = await fs.statfs('/tmp');
+    const freeBytes = bavail * bsize;
+    diskFreeMb = Math.round(freeBytes / 1024 / 1024);
+    if (freeBytes >= MIN_READY_DISK_BYTES) {
+      services.disk = 'ok';
+    }
+  } catch {
+    // services.disk remains 'error'
+  }
+
   const allHealthy = Object.values(services).every((s) => s === 'ok');
 
   res.status(allHealthy ? 200 : 503).json({
     status: allHealthy ? 'ok' : 'degraded',
     services,
+    disk: {
+      freeMb: diskFreeMb,
+      minRequiredMb: Math.round(MIN_READY_DISK_BYTES / 1024 / 1024),
+    },
   });
 });
 

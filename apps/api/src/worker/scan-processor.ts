@@ -9,6 +9,7 @@ import { UnrecoverableError } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scans, scanCategories, SCAN_CATEGORY_NAMES } from '../db/schema.js';
+import { cleanupRepo } from '../scanner/cleanup.js';
 
 interface ScanJobData {
   scanId: string;
@@ -27,6 +28,9 @@ function randomInt(min: number, max: number): number {
 
 export default async function scanProcessor(job: Job<ScanJobData>) {
   const { scanId, repoOwner, repoName } = job.data;
+
+  const repoDir = '' as string; // TODO: remove repoDir stub, replace with cloneRepo result
+
   // ** job.data also contains githubRepoId (unused in mock, needed by real scan tools) **
   // add back once scan routes are built
   console.log(`Processing scan ${scanId} for ${repoOwner}/${repoName}`);
@@ -125,5 +129,8 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     throw err; // Re-throw so BullMQ can retry
   } finally {
     clearTimeout(timeoutId);
+    if (repoDir) {
+      await cleanupRepo(repoDir);
+    }
   }
 }

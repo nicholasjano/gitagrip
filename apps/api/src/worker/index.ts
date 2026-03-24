@@ -1,15 +1,35 @@
 // creates worker instances for the scan and batch processors (separate from express app)
 
+import fs from 'fs/promises';
 import { Worker, Job } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
 import { bullRedis } from '../db/bull-redis.js';
 import { db } from '../db/index.js';
 import { scans, scanBatches } from '../db/schema.js';
 import { scanQueue } from '../queue/scan-queue.js';
+import { cleanupRepo } from '../scanner/cleanup.js';
 
 // determine file extension based on environment
 const isProd = process.env.NODE_ENV === 'production';
 const ext = isProd ? '.js' : '.ts';
+const SCAN_DIR_NAME_PREFIX = 'gitagrip-scan-';
+
+async function cleanupStaleTempScanDirs(): Promise<void> {
+  const entries = await fs.readdir('/tmp', { withFileTypes: true });
+  const staleDirs = entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(SCAN_DIR_NAME_PREFIX))
+    .map((entry) => `/tmp/${entry.name}`);
+
+  await Promise.all(staleDirs.map((dirPath) => cleanupRepo(dirPath)));
+
+  if (staleDirs.length > 0) {
+    console.log(
+      `[worker] cleaned ${staleDirs.length} stale temp scan director${staleDirs.length === 1 ? 'y' : 'ies'}`,
+    );
+  }
+}
+
+await cleanupStaleTempScanDirs();
 
 // Scan worker
 const scanWorker = new Worker(
