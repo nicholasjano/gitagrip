@@ -1,22 +1,9 @@
 // exports getCategoryApplicability for scan-processor.ts
 
+import type { SCAN_CATEGORY_NAMES } from '../db/schema.js';
 import type { FileManifest } from './detect-files.js';
 
-// mirrors the 13 CHECK constraint values from the scan_categories schema
-export type ScanCategoryName =
-  | 'repository_overview'
-  | 'maintenance_community'
-  | 'documentation_standards'
-  | 'security_vulnerabilities'
-  | 'exposed_secrets'
-  | 'repo_security_posture'
-  | 'dependency_health'
-  | 'code_quality'
-  | 'cicd_devops'
-  | 'workflow_security'
-  | 'iac_security'
-  | 'dockerfile_best_practices'
-  | 'container_security';
+export type ScanCategoryName = (typeof SCAN_CATEGORY_NAMES)[number];
 
 export type CategoryApplicability = Record<ScanCategoryName, boolean>;
 

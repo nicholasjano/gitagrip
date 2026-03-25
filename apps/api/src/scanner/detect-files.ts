@@ -139,9 +139,9 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
 
     if (isTopLevelOrGithub) {
       if (/^readme(\..+)?$/i.test(fileNameRaw)) manifest.hasReadme = true;
-      if (/^license(\..+)?$/i.test(fileNameRaw)) manifest.hasLicense = true;
+      if (/^(license|copying)(\..+)?$/i.test(fileNameRaw)) manifest.hasLicense = true;
       if (/^contributing(\..+)?$/i.test(fileNameRaw)) manifest.hasContributing = true;
-      if (/^changelog(\..+)?$/i.test(fileNameRaw)) manifest.hasChangelog = true;
+      if (/^(changelog|changes|history)(\..+)?$/i.test(fileNameRaw)) manifest.hasChangelog = true;
       if (/^code[-_]?of[-_]?conduct(\..+)?$/i.test(fileNameRaw)) manifest.hasCodeOfConduct = true;
       if (/^security(\..+)?$/i.test(fileNameRaw)) manifest.hasSecurityPolicy = true;
     }
