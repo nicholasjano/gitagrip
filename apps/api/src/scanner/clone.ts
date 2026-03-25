@@ -2,6 +2,7 @@
 
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
+import path from 'path';
 import fs from 'fs/promises';
 import { UnrecoverableError } from 'bullmq';
 import { db } from '../db/index.js';
@@ -68,6 +69,8 @@ export async function cloneRepo(
       'git',
       [
         'clone',
+        '-c',
+        'core.symlinks=false',
         '--depth=1',
         '--single-branch',
         `--branch=${defaultBranch}`,
@@ -79,7 +82,12 @@ export async function cloneRepo(
       { timeout: CLONE_TIMEOUT_MS },
     );
   } catch (err: unknown) {
-    const e = err as { killed?: boolean; code?: number | string; message?: string };
+    const e = err as {
+      killed?: boolean;
+      code?: number | string;
+      stderr?: string;
+      message?: string;
+    };
 
     if (e.killed) {
       throw new Error(
@@ -88,8 +96,27 @@ export async function cloneRepo(
       );
     }
 
+    // git binary not installed — code is the string 'ENOENT', not a number
+    if (e.code === 'ENOENT') {
+      throw new Error('git is not installed or not in PATH', { cause: err });
+    }
+
+    // git fatal errors all exit 128 — parse stderr for specific failure reason.
+    // more specific checks first since e.g. "remote branch not found" also contains "not found"
     if (e.code === 128) {
-      throw new UnrecoverableError(`Repository not found: ${repoOwner}/${repoName}`);
+      const stderr = (e.stderr ?? '').toLowerCase();
+
+      if (stderr.includes('remote branch') && stderr.includes('not found')) {
+        throw new UnrecoverableError(
+          `Branch '${defaultBranch}' not found in ${repoOwner}/${repoName}`,
+        );
+      }
+      if (stderr.includes('authentication') || stderr.includes('could not read username')) {
+        throw new UnrecoverableError(`Authentication failed for ${repoOwner}/${repoName}`);
+      }
+      if (stderr.includes('not found') || stderr.includes('does not exist')) {
+        throw new UnrecoverableError(`Repository not found: ${repoOwner}/${repoName}`);
+      }
     }
 
     throw new Error(`Clone failed for ${repoOwner}/${repoName}: ${e.message}`, { cause: err });
@@ -100,20 +127,50 @@ export async function cloneRepo(
   return destDir;
 }
 
-// symlinks in a cloned repo can point anywhere on the host filesystem.
-// tools like trivy and opengrep follow them by default, so we remove them upfront.
+// defense-in-depth: walk the tree manually with opendir + lstat so we never
+// follow directory symlinks (fs.readdir recursive does). core.symlinks=false
+// already prevents real symlinks, but a post-clone sweep catches edge cases.
 async function removeSymlinks(dirPath: string): Promise<void> {
-  const entries = await fs.readdir(dirPath, { recursive: true });
   let removed = 0;
 
-  for (const entry of entries) {
-    const fullPath = `${dirPath}/${entry}`;
-    const stat = await fs.lstat(fullPath);
-    if (stat.isSymbolicLink()) {
-      await fs.unlink(fullPath);
-      removed++;
+  async function walk(dir: string): Promise<void> {
+    let handle;
+    try {
+      handle = await fs.opendir(dir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+
+    try {
+      for await (const entry of handle) {
+        const fullPath = path.join(dir, entry.name);
+        let stats;
+        try {
+          stats = await fs.lstat(fullPath);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw err;
+        }
+
+        if (stats.isSymbolicLink()) {
+          try {
+            await fs.unlink(fullPath);
+            removed++;
+          } catch (err: unknown) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+          }
+        } else if (stats.isDirectory()) {
+          await walk(fullPath);
+        }
+      }
+    } finally {
+      // opendir handle is auto-closed by the for-await loop, but if we
+      // break out early due to an error the finally ensures cleanup
     }
   }
+
+  await walk(dirPath);
 
   if (removed > 0) {
     console.warn(`[clone] removed ${removed} symlink(s) from ${dirPath}`);

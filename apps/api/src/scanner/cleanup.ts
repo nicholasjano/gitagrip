@@ -10,5 +10,5 @@ export async function cleanupRepo(dirPath: string): Promise<void> {
     return;
   }
 
-  await fs.rm(dirPath, { recursive: true, force: true });
+  await fs.rm(dirPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }

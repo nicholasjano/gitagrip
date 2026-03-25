@@ -1,6 +1,6 @@
 // extracts files from clone in temp directory as a list, exports detectFiles for scan-processor.ts
 
-import { readdir, stat } from 'fs/promises';
+import { readdir, lstat } from 'fs/promises';
 import path from 'path';
 
 export interface FileManifest {
@@ -66,10 +66,7 @@ const CI_FILES = new Set(['Jenkinsfile', '.gitlab-ci.yml']);
 const CI_DIRS = ['.github/workflows', '.circleci'];
 
 export async function detectFiles(repoDir: string): Promise<FileManifest> {
-  const entries = await readdir(repoDir, { recursive: true });
-
-  // strip the leading repo dir prefix and exclude .git/
-  const files = entries.filter((e) => !e.startsWith('.git/') && e !== '.git');
+  const entries = await readdir(repoDir, { recursive: true, withFileTypes: true });
 
   const manifest: FileManifest = {
     hasDockerfile: false,
@@ -91,36 +88,38 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
 
   let totalBytes = 0;
 
-  for (const relativePath of files) {
-    const fullPath = path.join(repoDir, relativePath);
-    const fileName = path.basename(relativePath).toLowerCase();
-    const fileNameRaw = path.basename(relativePath);
+  for (const entry of entries) {
+    // skip symlinks entirely — defense-in-depth against traversal attacks
+    if (entry.isSymbolicLink()) continue;
+    if (!entry.isFile()) continue;
 
-    // stat to get size and skip directories
-    let fileStat;
+    const relativePath = path.relative(repoDir, path.join(entry.parentPath, entry.name));
+
+    if (relativePath.startsWith('.git/') || relativePath === '.git') continue;
+
+    const fileNameRaw = entry.name;
+    const fileName = fileNameRaw.toLowerCase();
+
+    // lstat for file size (doesn't follow symlinks)
+    let fileSize: number;
     try {
-      fileStat = await stat(fullPath);
+      const stats = await lstat(path.join(entry.parentPath, entry.name));
+      fileSize = stats.size;
     } catch {
       continue;
     }
-    if (fileStat.isDirectory()) continue;
 
     manifest.totalFiles++;
-    totalBytes += fileStat.size;
+    totalBytes += fileSize;
 
-    // dockerfile
     if (DOCKERFILE_PATTERN.test(fileNameRaw)) manifest.hasDockerfile = true;
 
-    // docker compose
     if (DOCKER_COMPOSE_PATTERN.test(fileNameRaw)) manifest.hasDockerCompose = true;
 
-    // iac
     if (IAC_PATTERN.test(relativePath)) manifest.hasIaCFiles = true;
 
-    // lock files
     if (LOCK_FILES.has(fileNameRaw)) manifest.hasLockFiles = true;
 
-    // ci config: github actions
     if (
       relativePath.startsWith('.github/workflows/') &&
       (fileName.endsWith('.yml') || fileName.endsWith('.yaml'))
@@ -129,11 +128,9 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
       manifest.hasWorkflowFiles = true;
     }
 
-    // ci config: other systems
     if (CI_FILES.has(fileNameRaw)) manifest.hasCIConfig = true;
     if (CI_DIRS.some((d) => relativePath.startsWith(d + '/'))) manifest.hasCIConfig = true;
 
-    // community/docs files — check top-level and .github/ only
     const dir = path.dirname(relativePath);
     const isTopLevelOrGithub = dir === '.' || dir === '.github';
 
@@ -146,7 +143,6 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
       if (/^security(\..+)?$/i.test(fileNameRaw)) manifest.hasSecurityPolicy = true;
     }
 
-    // source code files
     const ext = path.extname(fileName);
     if (SUPPORTED_LANGUAGE_EXTENSIONS.has(ext)) manifest.supportedLanguageFiles++;
   }
