@@ -8,6 +8,7 @@ import { db } from '../db/index.js';
 import { scans, scanBatches } from '../db/schema.js';
 import { scanQueue } from '../queue/scan-queue.js';
 import { cleanupRepo } from '../scanner/cleanup.js';
+import { killAllToolProcesses } from '../scanner/run-tool.js';
 
 // determine file extension based on environment
 const isProd = process.env.NODE_ENV === 'production';
@@ -119,6 +120,7 @@ async function shutdown() {
   }, 30000);
 
   try {
+    killAllToolProcesses();
     await scanWorker.close();
     await batchWorker.close();
     await bullRedis.quit();

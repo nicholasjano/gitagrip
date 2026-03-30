@@ -3,12 +3,14 @@
 // generic tool runner — the only place in the codebase that spawns external processes
 // every scan tool (gitleaks, trivy, opengrep, etc.) goes through here
 
-import { execFile, type ChildProcess } from 'child_process';
+import { execFile as execFileCb, type ChildProcess } from 'child_process';
 import { performance } from 'perf_hooks';
+import { promisify } from 'util';
 import type { ScanLogger } from './logger.js';
 
 // tracks every active child process so killAllToolProcesses() can reach them
 const activeProcesses = new Set<ChildProcess>();
+const execFile = promisify(execFileCb);
 
 export interface RunToolOptions {
   cmd: string;
@@ -46,26 +48,14 @@ export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
 
   const start = performance.now();
 
-  // execFile returns the child process synchronously before the promise resolves,
-  // but promisify wraps it so we lose access to the ChildProcess ref.
-  // we use the non-promisified version to grab the ref, then wrap it manually.
-  let childProcess: ChildProcess | undefined;
-
-  const resultPromise = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    childProcess = execFile(
-      cmd,
-      args,
-      { cwd, timeout: timeoutMs, maxBuffer },
-      (err, stdout, stderr) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve({ stdout, stderr });
-        }
-      },
-    );
-    activeProcesses.add(childProcess);
-  });
+  // execFile async promises expose the spawned child on `.child`
+  const resultPromise = execFile(cmd, args, {
+    cwd,
+    timeout: timeoutMs,
+    maxBuffer,
+  }) as Promise<{ stdout: string; stderr: string }> & { child: ChildProcess };
+  const childProcess = resultPromise.child;
+  activeProcesses.add(childProcess);
 
   try {
     const { stdout, stderr } = await resultPromise;
@@ -117,9 +107,7 @@ export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
     logger.error('tool', `${label} crashed`, { tool: label, durationMs, exitCode, stderr });
     return { status: 'crash', stdout, stderr, exitCode, durationMs, label };
   } finally {
-    if (childProcess) {
-      activeProcesses.delete(childProcess);
-    }
+    activeProcesses.delete(childProcess);
   }
 }
 
