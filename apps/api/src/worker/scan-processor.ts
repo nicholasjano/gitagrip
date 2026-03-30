@@ -80,17 +80,19 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     // TODO result gets used in future issues
     getCategoryApplicability(manifest);
 
-    // TODO (issue #13): run security tools (gitleaks, trivy, opengrep) in phases A-D
-    // each tool calls runTool() from run-tool.ts and returns CategoryScore[]
+    // phase A (api-bound) + phase B (light tools) run in parallel
+    // TODO (issue #15): phaseA — scorecard
+    // TODO (issues #13/#14): phaseB — Promise.all([gitleaks, jscpd, lizard])
 
-    // TODO (issue #14): run quality tools (lizard, jscpd) + file-based checks
+    const phaseA = async () => {
+      // TODO (issue #15): run scorecard
+    };
 
-    // TODO (issue #15): run OSSF scorecard
+    const phaseB = async () => {
+      // TODO (issues #13/#14): Promise.all([gitleaks, jscpd, lizard])
+    };
 
-    // TODO (issue #16): aggregate CategoryScore[] from all tools into per-category
-    // scores, write scan_categories rows, compute overall score
-
-    // NOTE: abort check should be in between each tool phase, not after all tools have run
+    await Promise.all([phaseA(), phaseB()]);
     if (abortController.signal.aborted) {
       await db
         .update(scans)
@@ -100,8 +102,41 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
           updatedAt: sql`NOW()`,
         })
         .where(eq(scans.id, scanId));
-      throw new UnrecoverableError('Job timeout during processing');
+      throw new UnrecoverableError('Job timeout after phases A/B');
     }
+    await job.updateProgress(60);
+
+    // phase C (heavy, sequential)
+    // TODO (issue #13): trivy
+    if (abortController.signal.aborted) {
+      await db
+        .update(scans)
+        .set({
+          status: 'timeout',
+          errorMessage: 'Scan exceeded 5 minute timeout',
+          updatedAt: sql`NOW()`,
+        })
+        .where(eq(scans.id, scanId));
+      throw new UnrecoverableError('Job timeout after phase C');
+    }
+    await job.updateProgress(75);
+
+    // phase D (heaviest, sequential)
+    // TODO (issue #13): opengrep
+    if (abortController.signal.aborted) {
+      await db
+        .update(scans)
+        .set({
+          status: 'timeout',
+          errorMessage: 'Scan exceeded 5 minute timeout',
+          updatedAt: sql`NOW()`,
+        })
+        .where(eq(scans.id, scanId));
+      throw new UnrecoverableError('Job timeout after phase D');
+    }
+    await job.updateProgress(80);
+
+    // TODO (issue #16): aggregate CategoryScore[] from all tools, write scan_categories rows
 
     await job.updateProgress(80);
 
