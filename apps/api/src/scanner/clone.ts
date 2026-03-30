@@ -8,6 +8,7 @@ import { UnrecoverableError } from 'bullmq';
 import { db } from '../db/index.js';
 import { scans } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
+import { createScanLogger } from './logger.js';
 
 const execFile = promisify(execFileCb);
 
@@ -27,6 +28,8 @@ export async function cloneRepo(
   defaultBranch: string,
   sizeKb: number,
 ): Promise<string> {
+  const logger = createScanLogger(scanId);
+
   if (!SAFE_NAME.test(repoOwner) || !SAFE_NAME.test(repoName)) {
     throw new UnrecoverableError(`Invalid repo owner or name: ${repoOwner}/${repoName}`);
   }
@@ -41,9 +44,7 @@ export async function cloneRepo(
   }
 
   if (sizeKb > 512_000) {
-    console.warn(
-      `[clone] large repo warning: ${repoOwner}/${repoName} is ${Math.round(sizeKb / 1024)} MB`,
-    );
+    logger.warn('clone', 'large repo warning', { repoOwner, repoName, sizeKb });
   }
 
   // check available disk space on /tmp before cloning
@@ -51,9 +52,7 @@ export async function cloneRepo(
   const freeDiskBytes = bavail * bsize;
 
   if (freeDiskBytes < MIN_FREE_DISK_BYTES) {
-    console.error(
-      `[clone] insufficient disk space: ${Math.round((freeDiskBytes / 1024 / 1024 / 1024) * 10) / 10} GB free`,
-    );
+    logger.error('clone', 'insufficient disk space', { freeDiskBytes });
     await db
       .update(scans)
       .set({ status: 'failed', errorMessage: 'Insufficient disk space' })

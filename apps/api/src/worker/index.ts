@@ -14,6 +14,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const ext = isProd ? '.js' : '.ts';
 const SCAN_DIR_NAME_PREFIX = 'gitagrip-scan-';
 
+// scan /tmp/ for any dirs left by previously crashed workers
 async function cleanupStaleTempScanDirs(): Promise<void> {
   const entries = await fs.readdir('/tmp', { withFileTypes: true });
   const staleDirs = entries
