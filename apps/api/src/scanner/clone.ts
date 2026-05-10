@@ -8,7 +8,7 @@ import { UnrecoverableError } from 'bullmq';
 import { db } from '../db/index.js';
 import { scans } from '../db/schema.js';
 import { eq } from 'drizzle-orm';
-import { createScanLogger } from './logger.js';
+import { createScanLogger, type ScanLogger } from './logger.js';
 
 const execFile = promisify(execFileCb);
 
@@ -121,7 +121,7 @@ export async function cloneRepo(
     throw new Error(`Clone failed for ${repoOwner}/${repoName}: ${e.message}`, { cause: err });
   }
 
-  await removeSymlinks(destDir);
+  await removeSymlinks(destDir, logger);
 
   return destDir;
 }
@@ -129,7 +129,7 @@ export async function cloneRepo(
 // defense-in-depth: walk the tree manually with opendir + lstat so we never
 // follow directory symlinks (fs.readdir recursive does). core.symlinks=false
 // already prevents real symlinks, but a post-clone sweep catches edge cases.
-async function removeSymlinks(dirPath: string): Promise<void> {
+async function removeSymlinks(dirPath: string, logger: ScanLogger): Promise<void> {
   let removed = 0;
 
   async function walk(dir: string): Promise<void> {
@@ -172,6 +172,6 @@ async function removeSymlinks(dirPath: string): Promise<void> {
   await walk(dirPath);
 
   if (removed > 0) {
-    console.warn(`[clone] removed ${removed} symlink(s) from ${dirPath}`);
+    logger.warn('clone', 'removed symlinks', { dirPath, count: removed });
   }
 }

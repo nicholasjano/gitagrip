@@ -229,6 +229,8 @@ export async function submitSingleScan(
       repoOwner: txRepo.owner.login,
       repoName: txRepo.name,
       githubRepoId: txRepo.id,
+      defaultBranch: txRepo.default_branch,
+      sizeKb: txRepo.size,
     },
     { jobId: `repo-scan-${txRepo.id}` },
   );
@@ -319,6 +321,8 @@ export async function submitBatchScan(
           githubRepoId: scans.githubRepoId,
           repoOwner: scans.repoOwner,
           repoName: scans.repoName,
+          defaultBranch: scans.defaultBranch,
+          sizeKb: scans.sizeKb,
         });
 
       return { batchId: batch.id, totalRepos: repos.length, scanRows };
@@ -346,6 +350,8 @@ export async function submitBatchScan(
         repoOwner: scan.repoOwner,
         repoName: scan.repoName,
         githubRepoId: scan.githubRepoId,
+        defaultBranch: scan.defaultBranch,
+        sizeKb: scan.sizeKb,
       },
       opts: { jobId: `repo-scan-${scan.githubRepoId}` },
     })),
