@@ -14,12 +14,14 @@ const execFile = promisify(execFileCb);
 
 // 2 gb limit
 const MAX_REPO_SIZE_KB = 2_097_152;
+const MAX_CLONE_SIZE_BYTES = MAX_REPO_SIZE_KB * 1024;
 const CLONE_TIMEOUT_MS = 120_000;
 // 5 gb minimum free space on /tmp before we attempt a clone
 const MIN_FREE_DISK_BYTES = 5 * 1024 * 1024 * 1024;
 
 // only allow safe characters in owner/repo names before interpolating into the url
 const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+const SAFE_BRANCH = /^(?!-)[A-Za-z0-9._/-]{1,255}$/;
 
 export async function cloneRepo(
   repoOwner: string,
@@ -27,11 +29,15 @@ export async function cloneRepo(
   scanId: string,
   defaultBranch: string,
   sizeKb: number,
+  signal?: AbortSignal,
 ): Promise<string> {
   const logger = createScanLogger(scanId);
 
   if (!SAFE_NAME.test(repoOwner) || !SAFE_NAME.test(repoName)) {
     throw new UnrecoverableError(`Invalid repo owner or name: ${repoOwner}/${repoName}`);
+  }
+  if (!SAFE_BRANCH.test(defaultBranch)) {
+    throw new UnrecoverableError(`Invalid default branch for ${repoOwner}/${repoName}`);
   }
 
   // check size before we even attempt the clone
@@ -78,7 +84,7 @@ export async function cloneRepo(
         cloneUrl,
         destDir,
       ],
-      { timeout: CLONE_TIMEOUT_MS },
+      { timeout: CLONE_TIMEOUT_MS, signal },
     );
   } catch (err: unknown) {
     const e = err as {
@@ -123,6 +129,15 @@ export async function cloneRepo(
 
   await removeSymlinks(destDir, logger);
 
+  const actualCloneSizeBytes = await getDirectorySizeBytes(destDir);
+  if (actualCloneSizeBytes > MAX_CLONE_SIZE_BYTES) {
+    await db
+      .update(scans)
+      .set({ status: 'failed', errorMessage: 'Repository exceeds 2 GB checked-out size limit' })
+      .where(eq(scans.id, scanId));
+    throw new UnrecoverableError('Repository exceeds 2 GB checked-out size limit');
+  }
+
   return destDir;
 }
 
@@ -143,6 +158,8 @@ async function removeSymlinks(dirPath: string, logger: ScanLogger): Promise<void
 
     try {
       for await (const entry of handle) {
+        if (entry.name === '.git') continue;
+
         const fullPath = path.join(dir, entry.name);
         let stats;
         try {
@@ -174,4 +191,46 @@ async function removeSymlinks(dirPath: string, logger: ScanLogger): Promise<void
   if (removed > 0) {
     logger.warn('clone', 'removed symlinks', { dirPath, count: removed });
   }
+}
+
+async function getDirectorySizeBytes(dirPath: string): Promise<number> {
+  let totalBytes = 0;
+
+  async function walk(dir: string): Promise<void> {
+    let handle;
+    try {
+      handle = await fs.opendir(dir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+
+    try {
+      for await (const entry of handle) {
+        const fullPath = path.join(dir, entry.name);
+        let stats;
+        try {
+          stats = await fs.lstat(fullPath);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw err;
+        }
+
+        if (stats.isSymbolicLink()) continue;
+        if (stats.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+        if (stats.isFile()) {
+          totalBytes += stats.size;
+          if (totalBytes > MAX_CLONE_SIZE_BYTES) return;
+        }
+      }
+    } finally {
+      // opendir handle is auto-closed by the for-await loop
+    }
+  }
+
+  await walk(dirPath);
+  return totalBytes;
 }

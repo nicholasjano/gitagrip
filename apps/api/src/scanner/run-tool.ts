@@ -11,11 +11,26 @@ import type { ScanLogger } from './logger.js';
 // tracks every active child process so killAllToolProcesses() can reach them
 const activeProcesses = new Set<ChildProcess>();
 const execFile = promisify(execFileCb);
+let cleanupHooksRegistered = false;
+let forceKillTimer: NodeJS.Timeout | null = null;
+let isCleaningUp = false;
+
+function safeKill(proc: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    proc.kill(signal);
+  } catch (err: unknown) {
+    // process already exited or pid got reused
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+      throw err;
+    }
+  }
+}
 
 export interface RunToolOptions {
   cmd: string;
   args: string[];
   cwd?: string;
+  signal?: AbortSignal;
   timeoutMs?: number; // default 300_000 (5 min)
   maxBuffer?: number; // default 50 MB
   expectedExitCodes?: number[]; // exit codes that mean "findings found", not "crash"
@@ -33,10 +48,13 @@ export interface ToolResult {
 }
 
 export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
+  registerCleanupHooks();
+
   const {
     cmd,
     args,
     cwd,
+    signal,
     timeoutMs = 300_000,
     maxBuffer = 50 * 1024 * 1024,
     expectedExitCodes = [],
@@ -51,6 +69,7 @@ export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
   // execFile async promises expose the spawned child on `.child`
   const resultPromise = execFile(cmd, args, {
     cwd,
+    signal,
     timeout: timeoutMs,
     maxBuffer,
   }) as Promise<{ stdout: string; stderr: string }> & { child: ChildProcess };
@@ -114,18 +133,46 @@ export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
 // called in scan-processor's finally block and in the worker's SIGTERM handler
 // gives each process 5 seconds to exit cleanly before force-killing
 export function killAllToolProcesses(): void {
-  if (activeProcesses.size === 0) return;
+  if (isCleaningUp || activeProcesses.size === 0) return;
+  isCleaningUp = true;
+
+  if (forceKillTimer) {
+    clearTimeout(forceKillTimer);
+    forceKillTimer = null;
+  }
 
   for (const proc of activeProcesses) {
-    proc.kill('SIGTERM');
+    safeKill(proc, 'SIGTERM');
   }
 
   // after 5 seconds, force-kill anything still alive
   // trivy needs time to release its vulnerability DB file locks
-  setTimeout(() => {
+  forceKillTimer = setTimeout(() => {
     for (const proc of activeProcesses) {
-      proc.kill('SIGKILL');
+      safeKill(proc, 'SIGKILL');
     }
     activeProcesses.clear();
+    forceKillTimer = null;
+    isCleaningUp = false;
   }, 5_000);
+  forceKillTimer.unref();
+}
+
+function registerCleanupHooks(): void {
+  if (cleanupHooksRegistered) return;
+  cleanupHooksRegistered = true;
+
+  const cleanup = () => {
+    killAllToolProcesses();
+  };
+  const cleanupOnExit = () => {
+    for (const proc of activeProcesses) {
+      safeKill(proc, 'SIGKILL');
+    }
+    activeProcesses.clear();
+  };
+
+  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', cleanup);
+  process.on('exit', cleanupOnExit);
 }

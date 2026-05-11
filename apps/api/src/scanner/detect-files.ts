@@ -1,6 +1,6 @@
 // extracts files from clone in temp directory as a list, exports detectFiles for scan-processor.ts
 
-import { readdir, lstat } from 'fs/promises';
+import { lstat, opendir } from 'fs/promises';
 import path from 'path';
 
 export interface FileManifest {
@@ -66,8 +66,6 @@ const CI_FILES = new Set(['Jenkinsfile', '.gitlab-ci.yml']);
 const CI_DIRS = ['.github/workflows', '.circleci'];
 
 export async function detectFiles(repoDir: string): Promise<FileManifest> {
-  const entries = await readdir(repoDir, { recursive: true, withFileTypes: true });
-
   const manifest: FileManifest = {
     hasDockerfile: false,
     hasDockerCompose: false,
@@ -88,64 +86,81 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
 
   let totalBytes = 0;
 
-  for (const entry of entries) {
-    // skip symlinks entirely — defense-in-depth against traversal attacks
-    if (entry.isSymbolicLink()) continue;
-    if (!entry.isFile()) continue;
-
-    const relativePath = path.relative(repoDir, path.join(entry.parentPath, entry.name));
-
-    if (relativePath.startsWith('.git/') || relativePath === '.git') continue;
-
-    const fileNameRaw = entry.name;
-    const fileName = fileNameRaw.toLowerCase();
-
-    // lstat for file size (doesn't follow symlinks)
-    let fileSize: number;
+  async function walk(dirPath: string): Promise<void> {
+    const handle = await opendir(dirPath);
     try {
-      const stats = await lstat(path.join(entry.parentPath, entry.name));
-      fileSize = stats.size;
-    } catch {
-      continue;
+      for await (const entry of handle) {
+        if (entry.name === '.git') continue;
+
+        const fullPath = path.join(dirPath, entry.name);
+        let stats;
+        try {
+          // lstat so symlinks are never followed during traversal
+          stats = await lstat(fullPath);
+        } catch {
+          continue;
+        }
+
+        if (stats.isSymbolicLink()) continue;
+
+        if (stats.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+        if (!stats.isFile()) continue;
+
+        const relativePath = path.relative(repoDir, fullPath);
+        if (relativePath.startsWith('.git/') || relativePath === '.git') continue;
+
+        const fileNameRaw = entry.name;
+        const fileName = fileNameRaw.toLowerCase();
+        const fileSize = stats.size;
+
+        manifest.totalFiles++;
+        totalBytes += fileSize;
+
+        if (DOCKERFILE_PATTERN.test(fileNameRaw)) manifest.hasDockerfile = true;
+
+        if (DOCKER_COMPOSE_PATTERN.test(fileNameRaw)) manifest.hasDockerCompose = true;
+
+        if (IAC_PATTERN.test(relativePath)) manifest.hasIaCFiles = true;
+
+        if (LOCK_FILES.has(fileNameRaw)) manifest.hasLockFiles = true;
+
+        if (
+          relativePath.startsWith('.github/workflows/') &&
+          (fileName.endsWith('.yml') || fileName.endsWith('.yaml'))
+        ) {
+          manifest.hasCIConfig = true;
+          manifest.hasWorkflowFiles = true;
+        }
+
+        if (CI_FILES.has(fileNameRaw)) manifest.hasCIConfig = true;
+        if (CI_DIRS.some((d) => relativePath.startsWith(d + '/'))) manifest.hasCIConfig = true;
+
+        const dir = path.dirname(relativePath);
+        const isTopLevelOrGithub = dir === '.' || dir === '.github';
+
+        if (isTopLevelOrGithub) {
+          if (/^readme(\..+)?$/i.test(fileNameRaw)) manifest.hasReadme = true;
+          if (/^(license|copying)(\..+)?$/i.test(fileNameRaw)) manifest.hasLicense = true;
+          if (/^contributing(\..+)?$/i.test(fileNameRaw)) manifest.hasContributing = true;
+          if (/^(changelog|changes|history)(\..+)?$/i.test(fileNameRaw))
+            manifest.hasChangelog = true;
+          if (/^code[-_]?of[-_]?conduct(\..+)?$/i.test(fileNameRaw))
+            manifest.hasCodeOfConduct = true;
+          if (/^security(\..+)?$/i.test(fileNameRaw)) manifest.hasSecurityPolicy = true;
+        }
+
+        const ext = path.extname(fileName);
+        if (SUPPORTED_LANGUAGE_EXTENSIONS.has(ext)) manifest.supportedLanguageFiles++;
+      }
+    } finally {
+      // opendir handle auto-closes after iteration
     }
-
-    manifest.totalFiles++;
-    totalBytes += fileSize;
-
-    if (DOCKERFILE_PATTERN.test(fileNameRaw)) manifest.hasDockerfile = true;
-
-    if (DOCKER_COMPOSE_PATTERN.test(fileNameRaw)) manifest.hasDockerCompose = true;
-
-    if (IAC_PATTERN.test(relativePath)) manifest.hasIaCFiles = true;
-
-    if (LOCK_FILES.has(fileNameRaw)) manifest.hasLockFiles = true;
-
-    if (
-      relativePath.startsWith('.github/workflows/') &&
-      (fileName.endsWith('.yml') || fileName.endsWith('.yaml'))
-    ) {
-      manifest.hasCIConfig = true;
-      manifest.hasWorkflowFiles = true;
-    }
-
-    if (CI_FILES.has(fileNameRaw)) manifest.hasCIConfig = true;
-    if (CI_DIRS.some((d) => relativePath.startsWith(d + '/'))) manifest.hasCIConfig = true;
-
-    const dir = path.dirname(relativePath);
-    const isTopLevelOrGithub = dir === '.' || dir === '.github';
-
-    if (isTopLevelOrGithub) {
-      if (/^readme(\..+)?$/i.test(fileNameRaw)) manifest.hasReadme = true;
-      if (/^(license|copying)(\..+)?$/i.test(fileNameRaw)) manifest.hasLicense = true;
-      if (/^contributing(\..+)?$/i.test(fileNameRaw)) manifest.hasContributing = true;
-      if (/^(changelog|changes|history)(\..+)?$/i.test(fileNameRaw)) manifest.hasChangelog = true;
-      if (/^code[-_]?of[-_]?conduct(\..+)?$/i.test(fileNameRaw)) manifest.hasCodeOfConduct = true;
-      if (/^security(\..+)?$/i.test(fileNameRaw)) manifest.hasSecurityPolicy = true;
-    }
-
-    const ext = path.extname(fileName);
-    if (SUPPORTED_LANGUAGE_EXTENSIONS.has(ext)) manifest.supportedLanguageFiles++;
   }
+
+  await walk(repoDir);
 
   manifest.totalSizeKb = Math.round(totalBytes / 1024);
 

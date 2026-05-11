@@ -219,8 +219,8 @@ export async function submitSingleScan(
   }
 
   // enqueue AFTER the transaction commits so a rollback can't orphan a Redis job.
-  // jobId provides de-facto deduplication — BullMQ won't create a new job if
-  // one with the same ID already exists.
+  // use scanId as jobId for stable status lookup.
+  // use BullMQ deduplication with ttl aligned to cooldown.
   const { scanId, repo: txRepo } = txResult;
   const job = await scanQueue.add(
     'scan-repo',
@@ -232,7 +232,10 @@ export async function submitSingleScan(
       defaultBranch: txRepo.default_branch,
       sizeKb: txRepo.size,
     },
-    { jobId: `repo-scan-${txRepo.id}` },
+    {
+      jobId: scanId,
+      deduplication: { id: `repo-scan-${txRepo.id}`, ttl: COOLDOWN_MS },
+    },
   );
 
   return { scanId, jobId: job.id! };
@@ -336,7 +339,7 @@ export async function submitBatchScan(
 
   // enqueue AFTER the transaction commits so a rollback can't orphan Redis jobs.
   // flowProducer.add() creates the parent + all children atomically in Redis.
-  // jobId on each child provides de-facto deduplication.
+  // use scan row id as jobId and cooldown-aligned dedup keys by repo id.
   const { batchId, totalRepos, scanRows } = txResult;
   await flowProducer.add({
     name: 'batch-complete',
@@ -353,7 +356,10 @@ export async function submitBatchScan(
         defaultBranch: scan.defaultBranch,
         sizeKb: scan.sizeKb,
       },
-      opts: { jobId: `repo-scan-${scan.githubRepoId}` },
+      opts: {
+        jobId: scan.id,
+        deduplication: { id: `repo-scan-${scan.githubRepoId}`, ttl: COOLDOWN_MS },
+      },
     })),
   });
 
@@ -377,10 +383,10 @@ export async function getScanStatus(scanId: string): Promise<ScanStatusResult | 
   }
 
   // for queued/in_progress, augment with live BullMQ job state
-  // job.id on the scan row isn't stored — look it up by deduplication key
+  // each scan uses scan.id as BullMQ jobId, so lookup is direct.
   // fall back gracefully if the job has already been cleaned up from Redis
   try {
-    const job = await Job.fromId(scanQueue, `repo-scan-${scan.githubRepoId}` as string);
+    const job = await Job.fromId(scanQueue, scan.id);
     if (job) {
       const state = await job.getState();
       const progress = typeof job.progress === 'number' ? job.progress : undefined;

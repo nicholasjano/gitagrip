@@ -63,7 +63,14 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     }
 
     // Clone repo
-    repoDir = await cloneRepo(repoOwner, repoName, scanId, defaultBranch, sizeKb);
+    repoDir = await cloneRepo(
+      repoOwner,
+      repoName,
+      scanId,
+      defaultBranch,
+      sizeKb,
+      abortController.signal,
+    );
     if (abortController.signal.aborted) {
       throw new UnrecoverableError('Clone repo timeout');
     }
@@ -137,8 +144,6 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     await job.updateProgress(80);
 
     // TODO (issue #16): aggregate CategoryScore[] from all tools, write scan_categories rows
-
-    await job.updateProgress(80);
 
     // Update scan to completed
     await db

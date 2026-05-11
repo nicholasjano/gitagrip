@@ -8,7 +8,6 @@ import { db } from '../db/index.js';
 import { scans, scanBatches } from '../db/schema.js';
 import { scanQueue } from '../queue/scan-queue.js';
 import { cleanupRepo } from '../scanner/cleanup.js';
-import { killAllToolProcesses } from '../scanner/run-tool.js';
 
 // determine file extension based on environment
 const isProd = process.env.NODE_ENV === 'production';
@@ -31,7 +30,11 @@ async function cleanupStaleTempScanDirs(): Promise<void> {
   }
 }
 
-await cleanupStaleTempScanDirs();
+try {
+  await cleanupStaleTempScanDirs();
+} catch (err) {
+  console.error('[worker] failed to cleanup stale scan dirs, continuing startup', err);
+}
 
 // Scan worker
 const scanWorker = new Worker(
@@ -40,7 +43,7 @@ const scanWorker = new Worker(
   {
     connection: bullRedis,
     concurrency: 3,
-    lockDuration: 300000,
+    lockDuration: 600000,
     useWorkerThreads: true,
     stalledInterval: 60000,
     maxStalledCount: 2,
@@ -54,7 +57,7 @@ const batchWorker = new Worker(
   {
     connection: bullRedis,
     concurrency: 3,
-    lockDuration: 300000,
+    lockDuration: 600000,
     useWorkerThreads: true,
     stalledInterval: 60000,
     maxStalledCount: 2,
@@ -120,7 +123,6 @@ async function shutdown() {
   }, 30000);
 
   try {
-    killAllToolProcesses();
     await scanWorker.close();
     await batchWorker.close();
     await bullRedis.quit();
