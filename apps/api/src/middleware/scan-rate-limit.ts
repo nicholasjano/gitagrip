@@ -1,7 +1,22 @@
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import type { Request } from 'express';
+import { RedisStore } from 'rate-limit-redis';
+import type { RedisReply } from 'rate-limit-redis';
+import { redis } from '../db/redis.js';
 
 const skipInDev = process.env.NODE_ENV !== 'production';
+function createRedisStore(prefix: string): RedisStore {
+  return new RedisStore({
+    prefix,
+    sendCommand: (...args: string[]) => {
+      const [command, ...rest] = args;
+      if (!command) {
+        return Promise.reject(new Error('Missing Redis command'));
+      }
+      return redis.call(command, ...rest) as Promise<RedisReply>;
+    },
+  });
+}
 
 function getLimiterKey(req: Request): string {
   const userId = req.user?.id;
@@ -14,6 +29,7 @@ function getLimiterKey(req: Request): string {
 export const scanSubmitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
+  store: createRedisStore('rate:scan-submit:'),
   skip: () => skipInDev,
   // req.user is set by requireAuth before this limiter runs
   keyGenerator: getLimiterKey,
@@ -25,6 +41,7 @@ export const scanSubmitLimiter = rateLimit({
 export const batchSubmitLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 2,
+  store: createRedisStore('rate:batch-submit:'),
   skip: () => skipInDev,
   keyGenerator: getLimiterKey,
   standardHeaders: 'draft-7',
@@ -36,6 +53,7 @@ export const batchSubmitLimiter = rateLimit({
 export const scanStatusLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  store: createRedisStore('rate:scan-status:'),
   skip: () => skipInDev,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
