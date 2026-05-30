@@ -1,5 +1,7 @@
 // trivy runner and parser — dependency, security, iac, docker, container categories
 
+import { readFile, rm } from 'fs/promises';
+import path from 'path';
 import type { FileManifest } from '../detect-files.js';
 import { runTool } from '../run-tool.js';
 import {
@@ -9,6 +11,8 @@ import {
   type ToolRunContext,
 } from '../types.js';
 import type { ScanCategoryName } from '../applicability.js';
+
+const REPORT_DIR = '/tmp';
 
 type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
 
@@ -146,64 +150,70 @@ function isIacType(type?: string): boolean {
 function isContainerMisconfig(type?: string, title?: string): boolean {
   const normalizedType = (type ?? '').toLowerCase();
   const normalizedTitle = (title ?? '').toLowerCase();
+  if (normalizedType === 'dockerfile') return false;
   return (
-    normalizedType === 'dockerfile' ||
     normalizedType.includes('docker-compose') ||
     normalizedTitle.includes('docker-compose') ||
     normalizedTitle.includes('compose')
   );
 }
 
-function parseReport(stdout: string): TrivyReport {
-  if (!stdout.trim()) return {};
-  return JSON.parse(stdout) as TrivyReport;
+function parseReport(raw: string): TrivyReport {
+  if (!raw.trim()) return {};
+  const parsed = JSON.parse(raw) as TrivyReport;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  if (!Array.isArray(parsed.Results)) return { ...parsed, Results: undefined };
+  return parsed;
 }
 
 export async function runTrivy(
   ctx: ToolRunContext & { manifest: FileManifest },
 ): Promise<CategoryScore[]> {
-  const { repoDir, manifest, logger, signal } = ctx;
+  const { repoDir, scanId, manifest, logger, signal } = ctx;
+  const reportPath = path.join(REPORT_DIR, `trivy-${scanId}.json`);
 
-  const result = await runTool({
-    cmd: 'trivy',
-    args: [
-      'fs',
-      '--scanners',
-      'vuln,misconfig,secret',
-      '--format',
-      'json',
-      '--timeout',
-      '5m',
-      repoDir,
-    ],
-    label: 'trivy',
-    logger,
-    signal,
-    maxBuffer: 50 * 1024 * 1024,
-  });
-
-  if (result.status === 'timeout') {
-    return buildFailureScores(manifest, 'trivy timed out');
-  }
-  if (result.status === 'crash') {
-    return buildFailureScores(manifest, 'trivy crashed');
-  }
-
-  let report: TrivyReport;
   try {
-    report = parseReport(result.stdout);
-  } catch {
-    return buildFailureScores(manifest, 'trivy JSON parse error');
-  }
+    const result = await runTool({
+      cmd: 'trivy',
+      args: [
+        'fs',
+        '--scanners',
+        'vuln,misconfig,secret',
+        '--format',
+        'json',
+        '--output',
+        reportPath,
+        '--timeout',
+        '5m',
+        repoDir,
+      ],
+      label: 'trivy',
+      logger,
+      signal,
+    });
 
-  const dependencyCounts = emptyCounts();
-  const securityCounts = emptyCounts();
-  const iacCounts = emptyCounts();
-  const dockerfileCounts = emptyCounts();
-  const containerCounts = emptyCounts();
+    if (result.status === 'timeout') {
+      return buildFailureScores(manifest, 'trivy timed out');
+    }
+    if (result.status === 'crash') {
+      return buildFailureScores(manifest, 'trivy crashed');
+    }
 
-  if (report.Results) {
-    for (const entry of report.Results) {
+    let report: TrivyReport;
+    try {
+      const raw = await readFile(reportPath, 'utf8');
+      report = parseReport(raw);
+    } catch {
+      return buildFailureScores(manifest, 'trivy JSON parse error');
+    }
+
+    const dependencyCounts = emptyCounts();
+    const securityCounts = emptyCounts();
+    const iacCounts = emptyCounts();
+    const dockerfileCounts = emptyCounts();
+    const containerCounts = emptyCounts();
+
+    for (const entry of report.Results ?? []) {
       for (const vuln of entry.Vulnerabilities ?? []) {
         addSeverity(dependencyCounts, vuln.Severity);
         const sev = (vuln.Severity ?? '').toUpperCase() as Severity;
@@ -229,28 +239,30 @@ export async function runTrivy(
         }
       }
     }
-  }
 
-  return [
-    buildScore(
-      'dependency_health',
-      dependencyCounts,
-      manifest.hasLockFiles,
-      'No lock files detected',
-    ),
-    buildScore('security_vulnerabilities', securityCounts, true, 'N/A'),
-    buildScore('iac_security', iacCounts, manifest.hasIaCFiles, 'No IaC files detected'),
-    buildScore(
-      'dockerfile_best_practices',
-      dockerfileCounts,
-      manifest.hasDockerfile,
-      'No Dockerfile detected',
-    ),
-    buildScore(
-      'container_security',
-      containerCounts,
-      manifest.hasDockerfile || manifest.hasDockerCompose,
-      'No Docker or compose files detected',
-    ),
-  ];
+    return [
+      buildScore(
+        'dependency_health',
+        dependencyCounts,
+        manifest.hasLockFiles,
+        'No lock files detected',
+      ),
+      buildScore('security_vulnerabilities', securityCounts, true, 'N/A'),
+      buildScore('iac_security', iacCounts, manifest.hasIaCFiles, 'No IaC files detected'),
+      buildScore(
+        'dockerfile_best_practices',
+        dockerfileCounts,
+        manifest.hasDockerfile,
+        'No Dockerfile detected',
+      ),
+      buildScore(
+        'container_security',
+        containerCounts,
+        manifest.hasDockerfile || manifest.hasDockerCompose,
+        'No Docker or compose files detected',
+      ),
+    ];
+  } finally {
+    await rm(reportPath, { force: true });
+  }
 }

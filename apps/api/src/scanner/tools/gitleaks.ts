@@ -82,6 +82,8 @@ async function parseReport(reportPath: string): Promise<GitleaksFinding[]> {
   const raw = await readFile(reportPath, 'utf8');
   if (!raw.trim()) return [];
 
+  // gitleaks v8.30.0 emits a top-level JSON array; the { findings } branch is
+  // defensive for older formats and malformed partial writes caught by catch below
   const parsed = JSON.parse(raw) as GitleaksFinding[] | { findings?: GitleaksFinding[] };
   if (Array.isArray(parsed)) return parsed;
   if (Array.isArray(parsed.findings)) return parsed.findings;
@@ -95,20 +97,11 @@ export async function runGitleaks(ctx: ToolRunContext): Promise<CategoryScore[]>
   try {
     const result = await runTool({
       cmd: 'gitleaks',
-      args: [
-        'dir',
-        repoDir,
-        '--report-format',
-        'json',
-        '--report-path',
-        reportPath,
-        '--no-banner',
-        '--exit-code',
-        '0',
-      ],
+      args: ['dir', repoDir, '--report-format', 'json', '--report-path', reportPath, '--no-banner'],
       label: 'gitleaks',
       logger,
       signal,
+      expectedExitCodes: [1],
     });
 
     if (result.status === 'timeout') {

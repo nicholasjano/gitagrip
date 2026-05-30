@@ -1,5 +1,7 @@
 // opengrep runner and parser — security, code quality, repo posture categories
 
+import { readFile, rm } from 'fs/promises';
+import path from 'path';
 import { runTool } from '../run-tool.js';
 import type { CategoryApplicability } from '../applicability.js';
 import {
@@ -8,6 +10,8 @@ import {
   type CategoryScore,
   type ToolRunContext,
 } from '../types.js';
+
+const REPORT_DIR = '/tmp';
 
 interface OpengrepResult {
   check_id?: string;
@@ -44,15 +48,17 @@ function normalizeSeverity(value?: string): keyof SeverityBucket {
 }
 
 function matchesRepoPosture(result: OpengrepResult): boolean {
-  const haystack = [result.check_id ?? '', result.path ?? '', result.extra?.message ?? '']
-    .join(' ')
-    .toLowerCase();
+  const checkId = (result.check_id ?? '').toLowerCase();
+  const filePath = (result.path ?? '').toLowerCase();
 
-  return (
-    haystack.includes('github-actions') ||
-    haystack.includes('secrets') ||
-    haystack.includes('hardcoded')
-  );
+  if (checkId.startsWith('github-actions.') || checkId.includes('.github-actions.')) {
+    return true;
+  }
+  if (filePath.includes('.github/workflows/')) {
+    return true;
+  }
+
+  return false;
 }
 
 function classifyFinding(result: OpengrepResult): OpengrepCategory {
@@ -90,9 +96,11 @@ function buildCategoryScore(
   };
 }
 
-function parseReport(stdout: string): OpengrepReport {
-  if (!stdout.trim()) return {};
-  return JSON.parse(stdout) as OpengrepReport;
+function parseReport(raw: string): OpengrepReport {
+  if (!raw.trim()) return {};
+  const parsed = JSON.parse(raw) as OpengrepReport;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  return parsed;
 }
 
 function buildFailureScores(applicability: CategoryApplicability, reason: string): CategoryScore[] {
@@ -115,72 +123,78 @@ function buildFailureScores(applicability: CategoryApplicability, reason: string
 export async function runOpengrep(
   ctx: ToolRunContext & { applicability: CategoryApplicability },
 ): Promise<CategoryScore[]> {
-  const { repoDir, logger, signal, applicability } = ctx;
+  const { repoDir, scanId, logger, signal, applicability } = ctx;
+  const reportPath = path.join(REPORT_DIR, `opengrep-${scanId}.json`);
 
-  const result = await runTool({
-    cmd: 'opengrep',
-    args: [
-      'scan',
-      '--json',
-      '-f',
-      '/opt/opengrep-rules/',
-      '-j',
-      '2',
-      '--timeout-threshold',
-      '3',
-      repoDir,
-    ],
-    label: 'opengrep',
-    logger,
-    signal,
-    maxBuffer: 50 * 1024 * 1024,
-    expectedExitCodes: [1],
-  });
-
-  if (result.status === 'timeout') {
-    return buildFailureScores(applicability, 'opengrep timed out');
-  }
-  if (result.status === 'crash') {
-    return buildFailureScores(applicability, 'opengrep crashed');
-  }
-
-  let report: OpengrepReport;
   try {
-    report = parseReport(result.stdout);
-  } catch {
-    return buildFailureScores(applicability, 'opengrep JSON parse error');
+    const result = await runTool({
+      cmd: 'opengrep',
+      args: [
+        'scan',
+        '--json',
+        '--output',
+        reportPath,
+        '-f',
+        '/opt/opengrep-rules/',
+        '-j',
+        '2',
+        '--timeout-threshold',
+        '3',
+        repoDir,
+      ],
+      label: 'opengrep',
+      logger,
+      signal,
+    });
+
+    if (result.status === 'timeout') {
+      return buildFailureScores(applicability, 'opengrep timed out');
+    }
+    if (result.status === 'crash') {
+      return buildFailureScores(applicability, 'opengrep crashed');
+    }
+
+    let report: OpengrepReport;
+    try {
+      const raw = await readFile(reportPath, 'utf8');
+      report = parseReport(raw);
+    } catch {
+      return buildFailureScores(applicability, 'opengrep JSON parse error');
+    }
+
+    const buckets: Record<OpengrepCategory, SeverityBucket> = {
+      security_vulnerabilities: emptyBucket(),
+      code_quality: emptyBucket(),
+      repo_security_posture: emptyBucket(),
+    };
+
+    for (const finding of report.results ?? []) {
+      const category = classifyFinding(finding);
+      const severity = normalizeSeverity(finding.extra?.severity);
+      buckets[category][severity]++;
+    }
+
+    return [
+      buildCategoryScore(
+        'security_vulnerabilities',
+        buckets.security_vulnerabilities,
+        applicability.security_vulnerabilities,
+        'N/A',
+      ),
+      buildCategoryScore(
+        'code_quality',
+        buckets.code_quality,
+        applicability.code_quality,
+        'No supported source files detected',
+      ),
+      buildCategoryScore(
+        'repo_security_posture',
+        buckets.repo_security_posture,
+        applicability.repo_security_posture,
+        'N/A',
+      ),
+    ];
+  } finally {
+    await rm(reportPath, { force: true });
   }
-
-  const buckets: Record<OpengrepCategory, SeverityBucket> = {
-    security_vulnerabilities: emptyBucket(),
-    code_quality: emptyBucket(),
-    repo_security_posture: emptyBucket(),
-  };
-
-  for (const finding of report.results ?? []) {
-    const category = classifyFinding(finding);
-    const severity = normalizeSeverity(finding.extra?.severity);
-    buckets[category][severity]++;
-  }
-
-  return [
-    buildCategoryScore(
-      'security_vulnerabilities',
-      buckets.security_vulnerabilities,
-      applicability.security_vulnerabilities,
-      'N/A',
-    ),
-    buildCategoryScore(
-      'code_quality',
-      buckets.code_quality,
-      applicability.code_quality,
-      'No supported source files detected',
-    ),
-    buildCategoryScore(
-      'repo_security_posture',
-      buckets.repo_security_posture,
-      applicability.repo_security_posture,
-      'N/A',
-    ),
-  ];
 }

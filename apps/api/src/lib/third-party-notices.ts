@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 const NOTICE_CANDIDATES = [
+  ...(process.env.NOTICES_PATH ? [path.resolve(process.env.NOTICES_PATH)] : []),
   path.resolve(process.cwd(), 'THIRD-PARTY-NOTICES.md'),
   path.resolve(process.cwd(), '../../THIRD-PARTY-NOTICES.md'),
   path.resolve(moduleDir, '../../../THIRD-PARTY-NOTICES.md'),
