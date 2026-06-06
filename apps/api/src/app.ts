@@ -9,6 +9,7 @@ import { pool } from './db/index.js';
 import { redis } from './db/redis.js';
 import authRouter from './routes/auth.js';
 import scanRouter, { batchRouter } from './routes/scans.js';
+import { readThirdPartyNotices } from './lib/third-party-notices.js';
 
 const app: Express = express();
 const MIN_READY_DISK_BYTES = 5 * 1024 * 1024 * 1024;
@@ -39,6 +40,15 @@ app.use('/batches', batchRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+app.get('/licenses', async (_req, res) => {
+  try {
+    const notices = await readThirdPartyNotices();
+    res.type('text/markdown; charset=utf-8').send(notices);
+  } catch {
+    res.status(404).json({ error: 'THIRD-PARTY-NOTICES.md not found' });
+  }
 });
 
 app.get('/health/ready', async (_req, res) => {

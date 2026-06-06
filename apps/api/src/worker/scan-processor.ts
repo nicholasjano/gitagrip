@@ -12,6 +12,10 @@ import { detectFiles } from '../scanner/detect-files.js';
 import { getCategoryApplicability } from '../scanner/applicability.js';
 import { cleanupRepo } from '../scanner/cleanup.js';
 import { killAllToolProcesses } from '../scanner/run-tool.js';
+import { runGitleaks } from '../scanner/tools/gitleaks.js';
+import { runTrivy } from '../scanner/tools/trivy.js';
+import { runOpengrep } from '../scanner/tools/opengrep.js';
+import { hasUsableCategoryData, type CategoryScore } from '../scanner/types.js';
 
 interface ScanJobData {
   scanId: string;
@@ -20,6 +24,17 @@ interface ScanJobData {
   githubRepoId: number;
   defaultBranch: string;
   sizeKb: number;
+}
+
+async function markScanTimeout(scanId: string): Promise<void> {
+  await db
+    .update(scans)
+    .set({
+      status: 'timeout',
+      errorMessage: 'Scan exceeded 5 minute timeout',
+      updatedAt: sql`NOW()`,
+    })
+    .where(eq(scans.id, scanId));
 }
 
 export default async function scanProcessor(job: Job<ScanJobData>) {
@@ -39,6 +54,14 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     },
     5 * 60 * 1000,
   ); // 5 minutes
+
+  const categoryScores: CategoryScore[] = [];
+  const toolCtx = {
+    repoDir: '',
+    scanId,
+    logger,
+    signal: abortController.signal,
+  };
 
   try {
     // Check for abort
@@ -71,6 +94,7 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       sizeKb,
       abortController.signal,
     );
+    toolCtx.repoDir = repoDir;
     if (abortController.signal.aborted) {
       throw new UnrecoverableError('Clone repo timeout');
     }
@@ -83,67 +107,60 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
     }
     await job.updateProgress(30);
 
-    // Get category applicability
-    // TODO result gets used in future issues
-    getCategoryApplicability(manifest);
-
-    // phase A (api-bound) + phase B (light tools) run in parallel
-    // TODO (issue #15): phaseA — scorecard
-    // TODO (issues #13/#14): phaseB — Promise.all([gitleaks, jscpd, lizard])
+    const applicability = getCategoryApplicability(manifest);
 
     const phaseA = async () => {
       // TODO (issue #15): run scorecard
     };
 
     const phaseB = async () => {
-      // TODO (issues #13/#14): Promise.all([gitleaks, jscpd, lizard])
+      const gitleaksScores = await runGitleaks(toolCtx);
+      categoryScores.push(...gitleaksScores);
+      // TODO (issue #14): jscpd, lizard
     };
 
     await Promise.all([phaseA(), phaseB()]);
     if (abortController.signal.aborted) {
-      await db
-        .update(scans)
-        .set({
-          status: 'timeout',
-          errorMessage: 'Scan exceeded 5 minute timeout',
-          updatedAt: sql`NOW()`,
-        })
-        .where(eq(scans.id, scanId));
+      killAllToolProcesses();
+      await markScanTimeout(scanId);
       throw new UnrecoverableError('Job timeout after phases A/B');
     }
     await job.updateProgress(60);
 
-    // phase C (heavy, sequential)
-    // TODO (issue #13): trivy
+    const trivyScores = await runTrivy({ ...toolCtx, manifest });
+    categoryScores.push(...trivyScores);
     if (abortController.signal.aborted) {
-      await db
-        .update(scans)
-        .set({
-          status: 'timeout',
-          errorMessage: 'Scan exceeded 5 minute timeout',
-          updatedAt: sql`NOW()`,
-        })
-        .where(eq(scans.id, scanId));
+      killAllToolProcesses();
+      await markScanTimeout(scanId);
       throw new UnrecoverableError('Job timeout after phase C');
     }
     await job.updateProgress(75);
 
-    // phase D (heaviest, sequential)
-    // TODO (issue #13): opengrep
+    const opengrepScores = await runOpengrep({ ...toolCtx, applicability });
+    categoryScores.push(...opengrepScores);
     if (abortController.signal.aborted) {
-      await db
-        .update(scans)
-        .set({
-          status: 'timeout',
-          errorMessage: 'Scan exceeded 5 minute timeout',
-          updatedAt: sql`NOW()`,
-        })
-        .where(eq(scans.id, scanId));
+      killAllToolProcesses();
+      await markScanTimeout(scanId);
       throw new UnrecoverableError('Job timeout after phase D');
     }
     await job.updateProgress(80);
 
+    if (!hasUsableCategoryData(categoryScores)) {
+      await db
+        .update(scans)
+        .set({
+          status: 'failed',
+          errorMessage: 'All security tools failed',
+          updatedAt: sql`NOW()`,
+        })
+        .where(eq(scans.id, scanId));
+      throw new UnrecoverableError('All security tools failed');
+    }
+
     // TODO (issue #16): aggregate CategoryScore[] from all tools, write scan_categories rows
+    logger.info('scan', 'category scores collected', {
+      categoryCount: categoryScores.length,
+    });
 
     // Update scan to completed
     await db

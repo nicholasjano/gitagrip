@@ -48,6 +48,10 @@ services:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://gitagrip:gitagrip@postgres:5432/gitagrip
       - REDIS_URL=redis://redis:6379
+      - HOME=/home/appuser
+      - TRIVY_CACHE_DIR=/var/lib/trivy
+    volumes:
+      - trivy_cache:/var/lib/trivy
     healthcheck:
       test:
         [
@@ -104,3 +108,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  trivy_cache:
