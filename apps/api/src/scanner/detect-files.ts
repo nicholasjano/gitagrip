@@ -10,6 +10,10 @@ export interface FileManifest {
   hasLockFiles: boolean;
   hasCIConfig: boolean;
   hasWorkflowFiles: boolean;
+  hasHusky: boolean;
+  hasPreCommit: boolean;
+  hasCodeowners: boolean;
+  workflowFileCount: number;
   hasReadme: boolean;
   hasLicense: boolean;
   hasContributing: boolean;
@@ -73,6 +77,10 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
     hasLockFiles: false,
     hasCIConfig: false,
     hasWorkflowFiles: false,
+    hasHusky: false,
+    hasPreCommit: false,
+    hasCodeowners: false,
+    workflowFileCount: 0,
     hasReadme: false,
     hasLicense: false,
     hasContributing: false,
@@ -104,6 +112,7 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
         if (stats.isSymbolicLink()) continue;
 
         if (stats.isDirectory()) {
+          if (entry.name === '.husky') manifest.hasHusky = true;
           await walk(fullPath);
           continue;
         }
@@ -133,13 +142,22 @@ export async function detectFiles(repoDir: string): Promise<FileManifest> {
         ) {
           manifest.hasCIConfig = true;
           manifest.hasWorkflowFiles = true;
+          manifest.workflowFileCount++;
         }
 
         if (CI_FILES.has(fileNameRaw)) manifest.hasCIConfig = true;
         if (CI_DIRS.some((d) => relativePath.startsWith(d + '/'))) manifest.hasCIConfig = true;
 
         const dir = path.dirname(relativePath);
+
+        if (fileName === 'codeowners' && (dir === '.' || dir === '.github')) {
+          manifest.hasCodeowners = true;
+        }
         const isTopLevelOrGithub = dir === '.' || dir === '.github';
+
+        if (dir === '.' && fileNameRaw === '.pre-commit-config.yaml') {
+          manifest.hasPreCommit = true;
+        }
 
         if (isTopLevelOrGithub) {
           if (/^readme(\..+)?$/i.test(fileNameRaw)) manifest.hasReadme = true;

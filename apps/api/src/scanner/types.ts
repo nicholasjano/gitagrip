@@ -18,6 +18,13 @@ export interface ToolRunContext {
   signal?: AbortSignal;
 }
 
+export interface PartialToolScore {
+  score: number;
+  detail: string;
+  failed: boolean;
+  failureReason?: string;
+}
+
 export function clampScore(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }

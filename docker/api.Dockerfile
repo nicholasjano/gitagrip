@@ -70,6 +70,12 @@ RUN mkdir -p /var/lib/trivy /home/appuser/.cache/opengrep \
     && chown -R appuser:nodejs /var/lib/trivy /home/appuser/.cache
 RUN chown -R appuser:nodejs /opt/opengrep-rules
 
+ARG LIZARD_VERSION=1.22.2
+ARG JSCPD_VERSION=4.2.5
+RUN apk add --no-cache python3 py3-pip \
+    && pip install --break-system-packages "lizard==${LIZARD_VERSION}" \
+    && npm install -g "jscpd@${JSCPD_VERSION}"
+
 COPY --from=builder --chown=appuser:nodejs /prod/api ./
 COPY --from=builder --chown=appuser:nodejs /app/apps/api/dist ./dist
 COPY --from=builder --chown=appuser:nodejs /app/THIRD-PARTY-NOTICES.md ./THIRD-PARTY-NOTICES.md
