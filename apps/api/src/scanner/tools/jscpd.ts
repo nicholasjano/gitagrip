@@ -14,7 +14,7 @@ interface JscpdStatistic {
 }
 
 interface JscpdReport {
-  statistics?: {
+  statistic?: {
     total?: JscpdStatistic;
   };
 }
@@ -36,7 +36,7 @@ async function parseReport(reportPath: string): Promise<JscpdStatistic | null> {
   if (!raw.trim()) return { percentage: 0, clones: 0, duplicatedLines: 0 };
 
   const parsed = JSON.parse(raw) as JscpdReport;
-  return parsed.statistics?.total ?? { percentage: 0, clones: 0, duplicatedLines: 0 };
+  return parsed.statistic?.total ?? { percentage: 0, clones: 0, duplicatedLines: 0 };
 }
 
 export async function runJscpd(ctx: ToolRunContext): Promise<PartialToolScore> {

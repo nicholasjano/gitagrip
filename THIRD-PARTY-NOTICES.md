@@ -722,7 +722,7 @@ END OF TERMS AND CONDITIONS
 
 ## Lizard
 
-- **Version:** v1.22.2
+- **Version:** v1.9.25
 - **Project URL:** https://github.com/terryyin/lizard
 - **Source code:** https://github.com/terryyin/lizard
 - **License:** MIT
@@ -768,7 +768,7 @@ GitAGrip invokes jscpd as a standalone npm global package in the API container.
 
 MIT License
 
-Copyright (c) 2013-2026 Andriy Kucherenko
+Copyright (c) 2013-2024 Andrey Kucherenko
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -34,9 +34,11 @@ function scoreComplexity(avgCcn: number, pctAbove15: number, maxCcn: number): nu
   return clampScore(score);
 }
 
-function parseCsv(stdout: string): { avgCcn: number; pctAbove15: number; maxCcn: number } | null {
+function parseCsv(
+  stdout: string,
+): { avgCcn: number; pctAbove15: number; pctAbove25: number; maxCcn: number } | null {
   if (!stdout.trim()) {
-    return { avgCcn: 0, pctAbove15: 0, maxCcn: 0 };
+    return { avgCcn: 0, pctAbove15: 0, pctAbove25: 0, maxCcn: 0 };
   }
 
   const rows = parse(stdout, {
@@ -53,15 +55,17 @@ function parseCsv(stdout: string): { avgCcn: number; pctAbove15: number; maxCcn:
   }
 
   if (ccnValues.length === 0) {
-    return { avgCcn: 0, pctAbove15: 0, maxCcn: 0 };
+    return { avgCcn: 0, pctAbove15: 0, pctAbove25: 0, maxCcn: 0 };
   }
 
   const sum = ccnValues.reduce((acc, v) => acc + v, 0);
   const above15 = ccnValues.filter((v) => v > 15).length;
+  const above25 = ccnValues.filter((v) => v > 25).length;
 
   return {
     avgCcn: sum / ccnValues.length,
     pctAbove15: (above15 / ccnValues.length) * 100,
+    pctAbove25: (above25 / ccnValues.length) * 100,
     maxCcn: Math.max(...ccnValues),
   };
 }
@@ -70,7 +74,7 @@ export async function runLizard(ctx: ToolRunContext): Promise<PartialToolScore> 
   const { repoDir, logger, signal } = ctx;
 
   const args = [
-    repoDir,
+    '.',
     ...EXCLUSIONS.flatMap((pattern) => ['-x', pattern]),
     '--csv',
     '-t',
@@ -83,6 +87,7 @@ export async function runLizard(ctx: ToolRunContext): Promise<PartialToolScore> 
     const result = await runTool({
       cmd: 'lizard',
       args,
+      cwd: repoDir,
       label: 'lizard',
       logger,
       signal,
@@ -96,10 +101,11 @@ export async function runLizard(ctx: ToolRunContext): Promise<PartialToolScore> 
 
     const score = scoreComplexity(stats.avgCcn, stats.pctAbove15, stats.maxCcn);
     const avgLabel = stats.avgCcn.toFixed(1);
+    const above25Label = stats.pctAbove25.toFixed(1);
 
     return {
       score,
-      detail: `Avg complexity: ${avgLabel} CCN`,
+      detail: `Avg complexity: ${avgLabel} CCN, ${above25Label}% functions > 25 CCN`,
       failed: false,
     };
   } catch (err) {

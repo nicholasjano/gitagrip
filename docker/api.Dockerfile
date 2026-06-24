@@ -70,7 +70,7 @@ RUN mkdir -p /var/lib/trivy /home/appuser/.cache/opengrep \
     && chown -R appuser:nodejs /var/lib/trivy /home/appuser/.cache
 RUN chown -R appuser:nodejs /opt/opengrep-rules
 
-ARG LIZARD_VERSION=1.22.2
+ARG LIZARD_VERSION=1.9.25
 ARG JSCPD_VERSION=4.2.5
 RUN apk add --no-cache python3 py3-pip \
     && pip install --break-system-packages "lizard==${LIZARD_VERSION}" \
