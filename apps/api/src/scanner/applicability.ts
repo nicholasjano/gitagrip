@@ -28,7 +28,7 @@ export function getCategoryApplicability(manifest: FileManifest): CategoryApplic
     // conditional
     dependency_health: manifest.hasLockFiles,
     code_quality: manifest.supportedLanguageFiles > 0,
-    cicd_devops: manifest.hasCIConfig,
+    cicd_devops: manifest.hasCIConfig || manifest.hasHusky || manifest.hasPreCommit,
     workflow_security: manifest.hasWorkflowFiles,
     iac_security: manifest.hasIaCFiles,
     dockerfile_best_practices: manifest.hasDockerfile,

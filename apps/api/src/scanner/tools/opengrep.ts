@@ -113,9 +113,9 @@ function buildFailureScores(applicability: CategoryApplicability, reason: string
       ? { category, score: 0, applicable: true, message: `Tool failed: ${reason}`, findingCount: 0 }
       : notApplicableScore(category, naReason);
 
+  // code_quality bucket computed internally but not published — Lizard+jscpd own that category
   return [
     fail('security_vulnerabilities', applicability.security_vulnerabilities, 'N/A'),
-    fail('code_quality', applicability.code_quality, 'No supported source files detected'),
     fail('repo_security_posture', applicability.repo_security_posture, 'N/A'),
   ];
 }
@@ -174,18 +174,15 @@ export async function runOpengrep(
       buckets[category][severity]++;
     }
 
+    // code_quality bucket kept in buckets for future re-enable; not pushed to categoryScores[]
+    void buckets.code_quality;
+
     return [
       buildCategoryScore(
         'security_vulnerabilities',
         buckets.security_vulnerabilities,
         applicability.security_vulnerabilities,
         'N/A',
-      ),
-      buildCategoryScore(
-        'code_quality',
-        buckets.code_quality,
-        applicability.code_quality,
-        'No supported source files detected',
       ),
       buildCategoryScore(
         'repo_security_posture',

@@ -12,10 +12,19 @@ import { detectFiles } from '../scanner/detect-files.js';
 import { getCategoryApplicability } from '../scanner/applicability.js';
 import { cleanupRepo } from '../scanner/cleanup.js';
 import { killAllToolProcesses } from '../scanner/run-tool.js';
+import { combineCodeQuality } from '../scanner/scoring/code-quality.js';
+import { runCICDCheck } from '../scanner/tools/cicd-check.js';
+import { runDocsCheck } from '../scanner/tools/docs-check.js';
 import { runGitleaks } from '../scanner/tools/gitleaks.js';
+import { runJscpd } from '../scanner/tools/jscpd.js';
+import { runLizard } from '../scanner/tools/lizard.js';
 import { runTrivy } from '../scanner/tools/trivy.js';
 import { runOpengrep } from '../scanner/tools/opengrep.js';
-import { hasUsableCategoryData, type CategoryScore } from '../scanner/types.js';
+import {
+  hasUsableCategoryData,
+  type CategoryScore,
+  type PartialToolScore,
+} from '../scanner/types.js';
 
 interface ScanJobData {
   scanId: string;
@@ -113,10 +122,29 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       // TODO (issue #15): run scorecard
     };
 
+    const skippedPartial = (): PartialToolScore => ({
+      score: 0,
+      detail: '',
+      failed: true,
+      failureReason: 'skipped',
+    });
+
     const phaseB = async () => {
-      const gitleaksScores = await runGitleaks(toolCtx);
+      const runQualityTools = applicability.code_quality;
+      const [gitleaksScores, lizardResult, jscpdResult, docsScores, cicdScores] = await Promise.all(
+        [
+          runGitleaks(toolCtx),
+          runQualityTools ? runLizard(toolCtx) : Promise.resolve(skippedPartial()),
+          runQualityTools ? runJscpd(toolCtx) : Promise.resolve(skippedPartial()),
+          runDocsCheck({ ...toolCtx, manifest }),
+          runCICDCheck({ ...toolCtx, manifest, applicability }),
+        ],
+      );
       categoryScores.push(...gitleaksScores);
-      // TODO (issue #14): jscpd, lizard
+      categoryScores.push(
+        combineCodeQuality(lizardResult, jscpdResult, applicability.code_quality),
+      );
+      categoryScores.push(...docsScores, ...cicdScores);
     };
 
     await Promise.all([phaseA(), phaseB()]);
