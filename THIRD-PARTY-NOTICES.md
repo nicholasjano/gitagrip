@@ -787,3 +787,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## OSSF Scorecard
+
+- **Version:** v5.4.0
+- **Project URL:** https://github.com/ossf/scorecard
+- **Source code:** https://github.com/ossf/scorecard/tree/v5.4.0
+- **License:** Apache License 2.0
+
+GitAGrip distributes the unmodified Scorecard binary and invokes it as a standalone process. The Scorecard repository does not ship a NOTICE file, so Apache 2.0 Section 4(d) imposes no additional attribution requirements. The full Apache License 2.0 text is included above in the [Trivy](#trivy) section.

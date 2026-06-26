@@ -134,6 +134,8 @@ export const scans = pgTable(
     language: varchar(),
     stars: integer().default(0).notNull(),
     sizeKb: integer().default(0).notNull(),
+    pushedAt: timestamp({ withTimezone: true }),
+    openIssuesCount: integer().default(0).notNull(),
     status: text({ enum: SCAN_STATUSES }).default('queued').notNull(),
     score: integer(),
     showOnLeaderboard: boolean().default(true).notNull(),
