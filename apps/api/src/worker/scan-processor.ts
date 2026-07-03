@@ -223,7 +223,6 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       ),
       combineRepoSecurityPosture(
         scorecardByCategory.get('repo_security_posture') ?? null,
-        findScore('repo_security_posture'),
         manifest.hasSecurityPolicy,
       ),
       combineWorkflowSecurity(

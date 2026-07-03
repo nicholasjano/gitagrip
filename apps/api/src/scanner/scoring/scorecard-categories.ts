@@ -67,20 +67,20 @@ export function combineCICDDevops(
   };
 }
 
-// repo_security_posture = Scorecard (50%) + Opengrep (30%) + SECURITY.md (20%)
-// always-applicable per applicability.ts; SECURITY.md presence is always a usable signal.
+// repo_security_posture = Scorecard (70%) + SECURITY.md (30%)
+// Opengrep dropped: classifyFinding never routes findings here, so the Opengrep
+// portion was a constant 100 that inflated the category. Scorecard's
+// Security-Policy/SAST/Binary-Artifacts/Signed-Releases checks carry the real
+// posture signal. always-applicable per applicability.ts; SECURITY.md is always usable.
 export function combineRepoSecurityPosture(
   scorecardScore: CategoryScore | null,
-  opengrepScore: CategoryScore,
   hasSecurityPolicy: boolean,
 ): CategoryScore {
   const sc = scorecardAvailable(scorecardScore);
-  const og = opengrepScore.applicable;
 
   const score = weightedAverage([
-    { score: scorecardScore?.score ?? 0, weight: 0.5, available: sc },
-    { score: opengrepScore.score, weight: 0.3, available: og },
-    { score: hasSecurityPolicy ? 100 : 0, weight: 0.2, available: true },
+    { score: scorecardScore?.score ?? 0, weight: 0.7, available: sc },
+    { score: hasSecurityPolicy ? 100 : 0, weight: 0.3, available: true },
   ]);
 
   // SECURITY.md alone guarantees a non-null score, but guard anyway
@@ -96,7 +96,6 @@ export function combineRepoSecurityPosture(
 
   const parts: string[] = [];
   if (sc) parts.push('Scorecard');
-  if (og) parts.push('Opengrep');
   parts.push(hasSecurityPolicy ? 'SECURITY.md present' : 'no SECURITY.md');
   return {
     category: 'repo_security_posture',

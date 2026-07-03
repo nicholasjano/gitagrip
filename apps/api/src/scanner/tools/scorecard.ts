@@ -116,7 +116,6 @@ export async function runScorecard(
         env: { ...process.env, GITHUB_AUTH_TOKEN: token },
         signal,
         timeoutMs: SCORECARD_TIMEOUT_MS,
-        expectedExitCodes: [0],
         label: 'scorecard',
         logger,
         // scorecard writes JSON to stdout; keep a generous buffer
@@ -128,19 +127,25 @@ export async function runScorecard(
       return naAll(`Scorecard run error: ${(err as Error).message}`);
     }
 
-    // crash or timeout -> degrade, don't fail the scan
+    // crash/timeout only: distinguish a rate-limit from a genuine failure.
+    // A real GitHub rate-limit makes scorecard exit non-zero -> runTool
+    // classifies it 'crash', preserving the rate-limit text in stderr
+    // (run-tool.ts keeps e.stderr on the error path). Gate on this no-usable-
+    // output path so a rate-limit warning in the stderr of an otherwise-
+    // successful run (some checks -1, valid JSON on stdout) still flows to the
+    // parser and degrades per-check, instead of failing the whole scan.
     if (result.status === 'crash' || result.status === 'timeout') {
+      // rate limited -> try a different token once, else throw for BullMQ retry
+      if (isRateLimited(result.stderr)) {
+        if (attempt === 0) {
+          logger.warn('scorecard', 'rate limited, retrying with next token');
+          continue;
+        }
+        throw new Error('Scorecard rate limited across all token retries');
+      }
+      // genuine crash/timeout -> degrade, don't fail the scan
       logger.warn('scorecard', `scorecard ${result.status}, degrading`);
       return naAll(`Scorecard ${result.status}`);
-    }
-
-    // rate limited -> try a different token once, else throw for BullMQ retry
-    if (isRateLimited(result.stderr)) {
-      if (attempt === 0) {
-        logger.warn('scorecard', 'rate limited, retrying with next token');
-        continue;
-      }
-      throw new Error('Scorecard rate limited across all token retries');
     }
 
     // parse JSON -> category portions

@@ -1,4 +1,4 @@
-// opengrep runner and parser — security, code quality, repo posture categories
+// opengrep runner and parser — security vulnerabilities, code quality, workflow security
 
 import { readFile, rm } from 'fs/promises';
 import path from 'path';
@@ -28,11 +28,7 @@ interface OpengrepReport {
   results?: OpengrepResult[];
 }
 
-type OpengrepCategory =
-  | 'security_vulnerabilities'
-  | 'code_quality'
-  | 'repo_security_posture'
-  | 'workflow_security';
+type OpengrepCategory = 'security_vulnerabilities' | 'code_quality' | 'workflow_security';
 
 interface SeverityBucket {
   error: number;
@@ -51,8 +47,9 @@ function normalizeSeverity(value?: string): keyof SeverityBucket {
   return 'info';
 }
 
-// Actions/workflow findings feed workflow_security (issue #15); other security
-// findings stay in repo_security_posture.
+// Actions/workflow findings feed workflow_security (issue #15); other findings
+// split by severity/CWE into security_vulnerabilities or code_quality.
+// repo_security_posture has no Opengrep feeder — Scorecard owns that category.
 function matchesWorkflowSecurity(result: OpengrepResult): boolean {
   const checkId = (result.check_id ?? '').toLowerCase();
   const filePath = (result.path ?? '').toLowerCase();
@@ -122,7 +119,6 @@ function buildFailureScores(applicability: CategoryApplicability, reason: string
   // code_quality bucket computed internally but not published — Lizard+jscpd own that category
   return [
     fail('security_vulnerabilities', applicability.security_vulnerabilities, 'N/A'),
-    fail('repo_security_posture', applicability.repo_security_posture, 'N/A'),
     fail('workflow_security', applicability.workflow_security, 'N/A'),
   ];
 }
@@ -172,7 +168,6 @@ export async function runOpengrep(
     const buckets: Record<OpengrepCategory, SeverityBucket> = {
       security_vulnerabilities: emptyBucket(),
       code_quality: emptyBucket(),
-      repo_security_posture: emptyBucket(),
       workflow_security: emptyBucket(),
     };
 
@@ -190,12 +185,6 @@ export async function runOpengrep(
         'security_vulnerabilities',
         buckets.security_vulnerabilities,
         applicability.security_vulnerabilities,
-        'N/A',
-      ),
-      buildCategoryScore(
-        'repo_security_posture',
-        buckets.repo_security_posture,
-        applicability.repo_security_posture,
         'N/A',
       ),
       buildCategoryScore(
