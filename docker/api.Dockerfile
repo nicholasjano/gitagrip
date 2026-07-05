@@ -17,6 +17,7 @@ RUN apk add --no-cache git curl wget ca-certificates coreutils
 # match scanner binaries to image arch (Mac arm64 vs prod amd64)
 ARG TARGETARCH
 ARG TRIVY_VERSION=0.69.3
+ARG SCORECARD_VERSION=5.4.0
 RUN case "$TARGETARCH" in \
     arm64) \
       OPENGREP_URL=https://github.com/opengrep/opengrep/releases/download/v1.22.0/opengrep_musllinux_aarch64; \
@@ -24,6 +25,7 @@ RUN case "$TARGETARCH" in \
       GITLEAKS_URL=https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_arm64.tar.gz; \
       GITLEAKS_SHA=b4cbbb6ddf7d1b2a603088cd03a4e3f7ce48ee7fd449b51f7de6ee2906f5fa2f; \
       TRIVY_ARCH=ARM64; \
+      SCORECARD_ARCH=arm64; \
       ;; \
     *) \
       OPENGREP_URL=https://github.com/opengrep/opengrep/releases/download/v1.22.0/opengrep_musllinux_x86; \
@@ -31,6 +33,7 @@ RUN case "$TARGETARCH" in \
       GITLEAKS_URL=https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz; \
       GITLEAKS_SHA=79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e; \
       TRIVY_ARCH=64bit; \
+      SCORECARD_ARCH=amd64; \
       ;; \
     esac \
     && wget -O /tmp/opengrep "$OPENGREP_URL" \
@@ -46,7 +49,13 @@ RUN case "$TARGETARCH" in \
     && grep "trivy_${TRIVY_VERSION}_Linux-${TRIVY_ARCH}.tar.gz" /tmp/trivy.sums \
        | sed "s|trivy_.*|/tmp/trivy.tar.gz|" | sha256sum -c - \
     && tar -xz -C /usr/local/bin/ trivy -f /tmp/trivy.tar.gz \
-    && rm /tmp/trivy.tar.gz /tmp/trivy.sums
+    && rm /tmp/trivy.tar.gz /tmp/trivy.sums \
+    && curl -sSfL "https://github.com/ossf/scorecard/releases/download/v${SCORECARD_VERSION}/scorecard_${SCORECARD_VERSION}_linux_${SCORECARD_ARCH}.tar.gz" -o /tmp/scorecard.tar.gz \
+    && curl -sSfL "https://github.com/ossf/scorecard/releases/download/v${SCORECARD_VERSION}/scorecard_checksums.txt" -o /tmp/scorecard.sums \
+    && grep "scorecard_${SCORECARD_VERSION}_linux_${SCORECARD_ARCH}.tar.gz" /tmp/scorecard.sums \
+       | sed "s|scorecard_.*|/tmp/scorecard.tar.gz|" | sha256sum -c - \
+    && tar -xz -C /usr/local/bin/ scorecard -f /tmp/scorecard.tar.gz \
+    && rm /tmp/scorecard.tar.gz /tmp/scorecard.sums
 
 # opengrep does not publish checksums.txt; SHA256s verified locally with:
 #   curl -sSfL "$OPENGREP_URL" -o /tmp/opengrep && sha256sum /tmp/opengrep

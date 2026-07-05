@@ -1,4 +1,4 @@
-// opengrep runner and parser — security, code quality, repo posture categories
+// opengrep runner and parser — security vulnerabilities, code quality, workflow security
 
 import { readFile, rm } from 'fs/promises';
 import path from 'path';
@@ -28,7 +28,7 @@ interface OpengrepReport {
   results?: OpengrepResult[];
 }
 
-type OpengrepCategory = 'security_vulnerabilities' | 'code_quality' | 'repo_security_posture';
+type OpengrepCategory = 'security_vulnerabilities' | 'code_quality' | 'workflow_security';
 
 interface SeverityBucket {
   error: number;
@@ -47,7 +47,10 @@ function normalizeSeverity(value?: string): keyof SeverityBucket {
   return 'info';
 }
 
-function matchesRepoPosture(result: OpengrepResult): boolean {
+// Actions/workflow findings feed workflow_security (issue #15); other findings
+// split by severity/CWE into security_vulnerabilities or code_quality.
+// repo_security_posture has no Opengrep feeder — Scorecard owns that category.
+function matchesWorkflowSecurity(result: OpengrepResult): boolean {
   const checkId = (result.check_id ?? '').toLowerCase();
   const filePath = (result.path ?? '').toLowerCase();
 
@@ -62,7 +65,7 @@ function matchesRepoPosture(result: OpengrepResult): boolean {
 }
 
 function classifyFinding(result: OpengrepResult): OpengrepCategory {
-  if (matchesRepoPosture(result)) return 'repo_security_posture';
+  if (matchesWorkflowSecurity(result)) return 'workflow_security';
 
   const cwe = result.extra?.metadata?.cwe ?? [];
   const severity = normalizeSeverity(result.extra?.severity);
@@ -116,7 +119,7 @@ function buildFailureScores(applicability: CategoryApplicability, reason: string
   // code_quality bucket computed internally but not published — Lizard+jscpd own that category
   return [
     fail('security_vulnerabilities', applicability.security_vulnerabilities, 'N/A'),
-    fail('repo_security_posture', applicability.repo_security_posture, 'N/A'),
+    fail('workflow_security', applicability.workflow_security, 'N/A'),
   ];
 }
 
@@ -165,7 +168,7 @@ export async function runOpengrep(
     const buckets: Record<OpengrepCategory, SeverityBucket> = {
       security_vulnerabilities: emptyBucket(),
       code_quality: emptyBucket(),
-      repo_security_posture: emptyBucket(),
+      workflow_security: emptyBucket(),
     };
 
     for (const finding of report.results ?? []) {
@@ -185,10 +188,10 @@ export async function runOpengrep(
         'N/A',
       ),
       buildCategoryScore(
-        'repo_security_posture',
-        buckets.repo_security_posture,
-        applicability.repo_security_posture,
-        'N/A',
+        'workflow_security',
+        buckets.workflow_security,
+        applicability.workflow_security,
+        'No GitHub Actions workflows detected',
       ),
     ];
   } finally {

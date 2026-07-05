@@ -30,6 +30,7 @@ export interface RunToolOptions {
   cmd: string;
   args: string[];
   cwd?: string;
+  env?: NodeJS.ProcessEnv; // optional per-run env override (e.g. GITHUB_AUTH_TOKEN for scorecard)
   signal?: AbortSignal;
   timeoutMs?: number; // default 300_000 (5 min)
   maxBuffer?: number; // default 50 MB
@@ -54,6 +55,7 @@ export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
     cmd,
     args,
     cwd,
+    env,
     signal,
     timeoutMs = 300_000,
     maxBuffer = 50 * 1024 * 1024,
@@ -69,6 +71,7 @@ export async function runTool(opts: RunToolOptions): Promise<ToolResult> {
   // execFile async promises expose the spawned child on `.child`
   const resultPromise = execFile(cmd, args, {
     cwd,
+    env,
     signal,
     timeout: timeoutMs,
     maxBuffer,

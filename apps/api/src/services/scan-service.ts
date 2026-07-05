@@ -44,6 +44,7 @@ interface GitHubRepo {
   language: string | null;
   stargazers_count: number;
   size: number;
+  pushed_at: string;
 }
 
 const COOLDOWN_MS = 3 * 60 * 60 * 1000; // 3 hours in ms
@@ -203,6 +204,7 @@ export async function submitSingleScan(
           language: repo.language,
           stars: repo.stargazers_count,
           sizeKb: repo.size,
+          pushedAt: new Date(repo.pushed_at),
           status: 'queued',
         })
         .returning({ id: scans.id });
@@ -316,6 +318,7 @@ export async function submitBatchScan(
             language: repo.language,
             stars: repo.stargazers_count,
             sizeKb: repo.size,
+            pushedAt: new Date(repo.pushed_at),
             status: 'queued' as const,
           })),
         )
