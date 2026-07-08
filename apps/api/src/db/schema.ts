@@ -132,6 +132,7 @@ export const scans = pgTable(
     isFork: boolean().default(false).notNull(),
     defaultBranch: varchar().default('main').notNull(),
     language: varchar(),
+    description: text(),
     stars: integer().default(0).notNull(),
     sizeKb: integer().default(0).notNull(),
     pushedAt: timestamp({ withTimezone: true }),
@@ -177,6 +178,7 @@ export const scanCategories = pgTable(
     category: text({ enum: SCAN_CATEGORY_NAMES }).notNull(),
     score: numeric().notNull(),
     message: text().notNull(),
+    applicable: boolean().default(true).notNull(),
   },
   (table) => [
     check(

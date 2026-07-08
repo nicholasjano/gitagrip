@@ -16,6 +16,7 @@ const EXCLUSIONS = [
 
 interface LizardRow {
   CCN?: string;
+  NLOC?: string;
 }
 
 function failedPartial(reason: string): PartialToolScore {
@@ -36,9 +37,15 @@ function scoreComplexity(avgCcn: number, pctAbove15: number, maxCcn: number): nu
 
 function parseCsv(
   stdout: string,
-): { avgCcn: number; pctAbove15: number; pctAbove25: number; maxCcn: number } | null {
+): {
+  avgCcn: number;
+  pctAbove15: number;
+  pctAbove25: number;
+  maxCcn: number;
+  totalNloc: number;
+} | null {
   if (!stdout.trim()) {
-    return { avgCcn: 0, pctAbove15: 0, pctAbove25: 0, maxCcn: 0 };
+    return { avgCcn: 0, pctAbove15: 0, pctAbove25: 0, maxCcn: 0, totalNloc: 0 };
   }
 
   const rows = parse(stdout, {
@@ -48,14 +55,17 @@ function parseCsv(
   }) as LizardRow[];
 
   const ccnValues: number[] = [];
+  let totalNloc = 0;
   for (const row of rows) {
     const ccn = Number(row.CCN);
     if (!Number.isFinite(ccn)) continue;
     ccnValues.push(ccn);
+    const nloc = Number(row.NLOC);
+    if (Number.isFinite(nloc)) totalNloc += nloc;
   }
 
   if (ccnValues.length === 0) {
-    return { avgCcn: 0, pctAbove15: 0, pctAbove25: 0, maxCcn: 0 };
+    return { avgCcn: 0, pctAbove15: 0, pctAbove25: 0, maxCcn: 0, totalNloc };
   }
 
   const sum = ccnValues.reduce((acc, v) => acc + v, 0);
@@ -67,6 +77,7 @@ function parseCsv(
     pctAbove15: (above15 / ccnValues.length) * 100,
     pctAbove25: (above25 / ccnValues.length) * 100,
     maxCcn: Math.max(...ccnValues),
+    totalNloc,
   };
 }
 
@@ -107,6 +118,7 @@ export async function runLizard(ctx: ToolRunContext): Promise<PartialToolScore> 
       score,
       detail: `Avg complexity: ${avgLabel} CCN, ${above25Label}% functions > 25 CCN`,
       failed: false,
+      nloc: stats.totalNloc,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'lizard parse error';

@@ -23,6 +23,7 @@ export interface PartialToolScore {
   detail: string;
   failed: boolean;
   failureReason?: string;
+  nloc?: number;
 }
 
 export function clampScore(score: number): number {
