@@ -2,7 +2,7 @@
 // always applicable; max 100. private repos add no points
 // (ponytail: excluded from leaderboard by the DB partial index, no double-gate here).
 
-import { clampScore, type CategoryScore } from '../types.js';
+import { clampScore, type CategoryScore, type PartialToolScore } from '../types.js';
 
 export interface RepoOverviewInput {
   stars: number;
@@ -10,6 +10,24 @@ export interface RepoOverviewInput {
   language: string | null;
   isFork: boolean;
   description: string | null;
+}
+
+// tiny-repo leaderboard gate. excludes repos with too few files / no source /
+// trivial code from the leaderboard. ponytail: when Lizard failed on a small
+// source set we can't confirm NLOC; treat as tiny. upgrade path: re-run Lizard
+// or count LOC via a lighter fallback.
+export function isTinyRepo(
+  totalFiles: number,
+  supportedLanguageFiles: number,
+  lizard: PartialToolScore | undefined,
+  codeQualityApplicable: boolean,
+): boolean {
+  return (
+    totalFiles < 5 ||
+    supportedLanguageFiles < 1 ||
+    (lizard?.failed && codeQualityApplicable && supportedLanguageFiles < 5) ||
+    (lizard?.nloc !== undefined && lizard.nloc < 100)
+  );
 }
 
 export function scoreRepositoryOverview(input: RepoOverviewInput): CategoryScore {

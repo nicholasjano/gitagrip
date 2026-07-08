@@ -20,7 +20,7 @@ import {
   combineWorkflowSecurity,
 } from '../scanner/scoring/scorecard-categories.js';
 import { computeOverallScore } from '../scanner/scoring/aggregate.js';
-import { scoreRepositoryOverview } from '../scanner/scoring/repo-overview.js';
+import { isTinyRepo, scoreRepositoryOverview } from '../scanner/scoring/repo-overview.js';
 import { runCICDCheck } from '../scanner/tools/cicd-check.js';
 import { runDocsCheck } from '../scanner/tools/docs-check.js';
 import { runGitleaks } from '../scanner/tools/gitleaks.js';
@@ -268,10 +268,12 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
 
     // tiny-repo gate: plugs the "50 asset files, zero code" hole where Lizard
     // was skipped so NLOC is unknown
-    const tiny =
-      manifest.totalFiles < 5 ||
-      manifest.supportedLanguageFiles < 1 ||
-      (lizardResult?.nloc !== undefined && lizardResult.nloc < 100);
+    const tiny = isTinyRepo(
+      manifest.totalFiles,
+      manifest.supportedLanguageFiles,
+      lizardResult,
+      applicability.code_quality,
+    );
     const showOnLeaderboard = result.leaderboardEligible && !tiny;
 
     await db.insert(scanCategories).values(

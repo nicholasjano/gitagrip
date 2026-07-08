@@ -3,7 +3,7 @@
 // at the issue's weights. when a portion is unavailable (tool failed/N/A),
 // the surviving portions renormalize to 100% — same pattern as combineCodeQuality.
 
-import { clampScore, notApplicableScore, type CategoryScore } from '../types.js';
+import { clampScore, isToolFailure, notApplicableScore, type CategoryScore } from '../types.js';
 
 interface Portion {
   score: number;
@@ -25,6 +25,13 @@ function scorecardAvailable(s: CategoryScore | null): boolean {
   return s !== null && s.applicable;
 }
 
+// non-Scorecard portion is usable only if applicable AND not a tool-failure 0.
+// matches pickWorse in aggregate.ts: a crashed tool's placeholder 0 must not
+// penalize the blend — it renormalizes away to the surviving portions.
+function portionAvailable(s: CategoryScore): boolean {
+  return s.applicable && !isToolFailure(s);
+}
+
 // cicd_devops = file-based check (40%) + Scorecard CI-Tests/Branch-Protection (60%)
 // Gap C: Scorecard can un-N/A the category when no CI files were detected locally.
 export function combineCICDDevops(
@@ -33,7 +40,7 @@ export function combineCICDDevops(
   applicable: boolean,
 ): CategoryScore {
   const sc = scorecardAvailable(scorecardScore);
-  const file = fileScore.applicable;
+  const file = portionAvailable(fileScore);
   // Scorecard present -> applicable regardless of file-based detection
   const isApplicable = sc || applicable;
 
@@ -117,7 +124,7 @@ export function combineWorkflowSecurity(
   }
 
   const sc = scorecardAvailable(scorecardScore);
-  const og = opengrepScore.applicable;
+  const og = portionAvailable(opengrepScore);
 
   const score = weightedAverage([
     { score: scorecardScore?.score ?? 0, weight: 0.7, available: sc },

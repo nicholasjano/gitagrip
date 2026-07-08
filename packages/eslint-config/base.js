@@ -28,15 +28,7 @@ const baseConfig = [
     },
   },
   {
-    ignores: [
-      'node_modules/',
-      'dist/',
-      '.next/',
-      '.turbo/',
-      'coverage/',
-      'tmp/',
-      '*.config.bundled_*',
-    ],
+    ignores: ['node_modules/', 'dist/', '.next/', '.turbo/', 'coverage/', '*.config.bundled_*'],
   },
 ];
 

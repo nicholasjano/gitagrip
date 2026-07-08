@@ -4,8 +4,9 @@
 import assert from 'node:assert/strict';
 import { tierForCategory } from '@gitagrip/shared';
 import { computeOverallScore } from './aggregate.js';
-import { scoreRepositoryOverview } from './repo-overview.js';
-import type { CategoryScore } from '../types.js';
+import { isTinyRepo, scoreRepositoryOverview } from './repo-overview.js';
+import { combineWorkflowSecurity } from './scorecard-categories.js';
+import type { CategoryScore, PartialToolScore } from '../types.js';
 import type { ScanCategoryName } from '../applicability.js';
 
 function score(
@@ -89,6 +90,54 @@ function run(): void {
       description: null,
     });
     assert.equal(empty.score, 0, 'repo-overview: empty = 0 (clamped)');
+  }
+
+  // 7. isTinyRepo — Lizard crash on a small source set is tiny (the #2 fix)
+  {
+    const crashed: PartialToolScore = {
+      score: 0,
+      detail: '',
+      failed: true,
+      failureReason: 'crashed',
+    };
+    assert.equal(
+      isTinyRepo(10, 2, crashed, true),
+      true,
+      'tiny: Lizard crash + 2 source files = tiny',
+    );
+    // large source set + Lizard crash -> NOT tiny (don't ban big repos on a crash)
+    assert.equal(
+      isTinyRepo(200, 50, crashed, true),
+      false,
+      'tiny: Lizard crash + 50 source files = not tiny',
+    );
+    // measured trivial NLOC -> tiny
+    const measured: PartialToolScore = { score: 90, detail: 'ok', failed: false, nloc: 30 };
+    assert.equal(isTinyRepo(20, 5, measured, true), true, 'tiny: NLOC 30 < 100 = tiny');
+    // measured healthy NLOC -> not tiny
+    const healthy: PartialToolScore = { score: 90, detail: 'ok', failed: false, nloc: 5000 };
+    assert.equal(isTinyRepo(200, 50, healthy, true), false, 'tiny: NLOC 5000 = not tiny');
+  }
+
+  // 8. combineWorkflowSecurity — Opengrep tool-failure renormalizes to Scorecard (the #4 fix)
+  //    without the guard: (80*0.7 + 0*0.3) = 56. with the guard: 80*0.7/0.7 = 80.
+  {
+    const scorecard: CategoryScore = {
+      category: 'workflow_security',
+      score: 80,
+      applicable: true,
+      message: 'Scorecard',
+    };
+    const opengrepFailed: CategoryScore = {
+      category: 'workflow_security',
+      score: 0,
+      applicable: true,
+      message: 'Tool failed: opengrep crashed',
+      findingCount: 0,
+    };
+    const result = combineWorkflowSecurity(scorecard, opengrepFailed, true);
+    assert.equal(result.score, 80, 'combiner: Opengrep crash renormalizes to Scorecard portion');
+    assert.equal(result.applicable, true, 'combiner: still applicable');
   }
 
   console.log('aggregate.check: all assertions passed');
