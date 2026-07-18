@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch --env-file=../../.env src/index.ts",
     "worker": "tsx watch --env-file=../../.env src/worker/index.ts",
+    "benchmark": "tsx --env-file=../../.env src/scanner/benchmark.ts",
     "build": "tsup",
     "start": "node dist/index.js",
     "lint": "eslint .",

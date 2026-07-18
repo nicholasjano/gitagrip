@@ -1,0 +1,11 @@
+{
+  "//": "TEMPORARY (issue #17): typecheck the scripts/*.check.ts benchmark tests against real src types. Delete with the scripts.",
+  "extends": "@gitagrip/typescript-config/node.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "outDir": "dist-scripts"
+  },
+  "include": ["src", "scripts"],
+  "exclude": ["node_modules", "dist"]
+}

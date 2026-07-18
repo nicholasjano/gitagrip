@@ -1,5 +1,6 @@
 // contains code for the scan processor worker
-// this worker is responsible for processing a single scan
+// thin adapter: owns BullMQ + DB concerns, delegates the scan lifecycle to
+// runScanPipeline (issue #17) so the benchmark can drive the same pipeline.
 
 import type { Job } from 'bullmq';
 import { UnrecoverableError } from 'bullmq';
@@ -7,34 +8,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scanCategories, scans } from '../db/schema.js';
 import { createScanLogger } from '../scanner/logger.js';
-import { cloneRepo } from '../scanner/clone.js';
-import { detectFiles } from '../scanner/detect-files.js';
-import { getCategoryApplicability } from '../scanner/applicability.js';
-import { cleanupRepo } from '../scanner/cleanup.js';
-import { killAllToolProcesses } from '../scanner/run-tool.js';
-import { combineCodeQuality } from '../scanner/scoring/code-quality.js';
-import { combineMaintenance } from '../scanner/scoring/maintenance.js';
-import {
-  combineCICDDevops,
-  combineRepoSecurityPosture,
-  combineWorkflowSecurity,
-} from '../scanner/scoring/scorecard-categories.js';
-import { computeOverallScore } from '../scanner/scoring/aggregate.js';
-import { isTinyRepo, scoreRepositoryOverview } from '../scanner/scoring/repo-overview.js';
-import { runCICDCheck } from '../scanner/tools/cicd-check.js';
-import { runDocsCheck } from '../scanner/tools/docs-check.js';
-import { runGitleaks } from '../scanner/tools/gitleaks.js';
-import { runJscpd } from '../scanner/tools/jscpd.js';
-import { runLizard } from '../scanner/tools/lizard.js';
-import { runScorecard } from '../scanner/tools/scorecard.js';
-import { runTrivy } from '../scanner/tools/trivy.js';
-import { runOpengrep } from '../scanner/tools/opengrep.js';
-import {
-  hasUsableCategoryData,
-  notApplicableScore,
-  type CategoryScore,
-  type PartialToolScore,
-} from '../scanner/types.js';
+import { runScanPipeline, type ScanPipelineResult, type ScanTimings } from '../scanner/run-scan.js';
 
 interface ScanJobData {
   scanId: string;
@@ -42,6 +16,14 @@ interface ScanJobData {
   repoName: string;
   githubRepoId: number;
   defaultBranch: string;
+  sizeKb: number;
+}
+
+export interface ScanProcessorReturnValue {
+  timings: ScanTimings;
+  score: number;
+  applicableCount: number;
+  fileCount: number;
   sizeKb: number;
 }
 
@@ -56,39 +38,24 @@ async function markScanTimeout(scanId: string): Promise<void> {
     .where(eq(scans.id, scanId));
 }
 
-export default async function scanProcessor(job: Job<ScanJobData>) {
+export default async function scanProcessor(
+  job: Job<ScanJobData>,
+): Promise<ScanProcessorReturnValue | void> {
   const { scanId, repoOwner, repoName, defaultBranch, sizeKb } = job.data;
 
   const logger = createScanLogger(scanId);
 
-  let repoDir: string | undefined;
-
   logger.info('scan', `processing scan for ${repoOwner}/${repoName}`);
 
-  // Timeout handling
   const abortController = new AbortController();
-  const timeoutId = setTimeout(
-    () => {
-      abortController.abort();
-    },
-    5 * 60 * 1000,
-  ); // 5 minutes
-
-  const categoryScores: CategoryScore[] = [];
-  const toolCtx = {
-    repoDir: '',
-    scanId,
-    logger,
-    signal: abortController.signal,
-  };
+  const timeoutId = setTimeout(() => abortController.abort(), 5 * 60 * 1000);
 
   try {
-    // Check for abort
     if (abortController.signal.aborted) {
       throw new UnrecoverableError('Job timeout before starting');
     }
 
-    // Update status to in_progress (with compare-and-swap guard)
+    // CAS into in_progress + read the metadata the pipeline needs
     const updateResult = await db
       .update(scans)
       .set({
@@ -107,174 +74,34 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       });
 
     if (updateResult.length === 0) {
-      // Scan was already processed or cancelled
       logger.info('scan', 'scan already processed or cancelled');
       return;
     }
 
     const scanRow = updateResult[0]!;
 
-    // Clone repo
-    repoDir = await cloneRepo(
-      repoOwner,
-      repoName,
-      scanId,
-      defaultBranch,
-      sizeKb,
-      abortController.signal,
-    );
-    toolCtx.repoDir = repoDir;
-    if (abortController.signal.aborted) {
-      throw new UnrecoverableError('Clone repo timeout');
-    }
-    await job.updateProgress(15);
-
-    // Detect files
-    const manifest = await detectFiles(repoDir);
-    if (abortController.signal.aborted) {
-      throw new UnrecoverableError('Detect files timeout');
-    }
-    await job.updateProgress(30);
-
-    const applicability = getCategoryApplicability(manifest);
-
-    // Phase A: Scorecard (API-bound) runs in parallel with Phase B (CPU-bound).
-    // Scorecard failure (crash/timeout/parse) -> degrade to N/A portions.
-    // Rate-limit errors propagate so BullMQ backoff retries the whole scan.
-    const phaseA = async (): Promise<CategoryScore[] | null> => {
-      try {
-        return await runScorecard({
-          ...toolCtx,
-          scan: { repoOwner, repoName, isPrivate: scanRow.isPrivate },
-        });
-      } catch (err) {
-        if (/rate limit/i.test((err as Error).message)) throw err;
-        logger.warn('scorecard', `Scorecard failed, degrading: ${(err as Error).message}`);
-        return null;
-      }
-    };
-
-    const skippedPartial = (): PartialToolScore => ({
-      score: 0,
-      detail: '',
-      failed: true,
-      failureReason: 'skipped',
-    });
-
-    let lizardResult: PartialToolScore | undefined;
-
-    const phaseB = async () => {
-      const runQualityTools = applicability.code_quality;
-      const [gitleaksScores, lizard, jscpdResult, docsScores, cicdScores] = await Promise.all([
-        runGitleaks(toolCtx),
-        runQualityTools ? runLizard(toolCtx) : Promise.resolve(skippedPartial()),
-        runQualityTools ? runJscpd(toolCtx) : Promise.resolve(skippedPartial()),
-        runDocsCheck({ ...toolCtx, manifest }),
-        runCICDCheck({ ...toolCtx, manifest, applicability }),
-      ]);
-      lizardResult = lizard;
-      categoryScores.push(...gitleaksScores);
-      categoryScores.push(combineCodeQuality(lizard, jscpdResult, applicability.code_quality));
-      categoryScores.push(...docsScores, ...cicdScores);
-    };
-
-    const [scorecardScores] = await Promise.all([phaseA(), phaseB()]);
-    if (abortController.signal.aborted) {
-      killAllToolProcesses();
-      await markScanTimeout(scanId);
-      throw new UnrecoverableError('Job timeout after phases A/B');
-    }
-    await job.updateProgress(60);
-
-    const trivyScores = await runTrivy({ ...toolCtx, manifest });
-    categoryScores.push(...trivyScores);
-    if (abortController.signal.aborted) {
-      killAllToolProcesses();
-      await markScanTimeout(scanId);
-      throw new UnrecoverableError('Job timeout after phase C');
-    }
-    await job.updateProgress(75);
-
-    const opengrepScores = await runOpengrep({ ...toolCtx, applicability });
-    categoryScores.push(...opengrepScores);
-    if (abortController.signal.aborted) {
-      killAllToolProcesses();
-      await markScanTimeout(scanId);
-      throw new UnrecoverableError('Job timeout after phase D');
-    }
-    await job.updateProgress(80);
-
-    // Blend Scorecard + file/Opengrep/SECURITY.md portions (issue #15).
-    // Replace the raw tool scores for the 4 Scorecard-fed categories with
-    // the enriched combined scores; other categories pass through untouched.
-    const scorecardByCategory = new Map<string, CategoryScore>();
-    for (const s of scorecardScores ?? []) {
-      scorecardByCategory.set(s.category, s);
-    }
-    const findScore = (cat: CategoryScore['category']): CategoryScore =>
-      categoryScores.find((s) => s.category === cat) ?? notApplicableScore(cat, 'not yet computed');
-
-    const blended: CategoryScore[] = [
-      combineMaintenance(
-        scorecardByCategory.get('maintenance_community') ?? null,
-        scanRow.pushedAt,
-        scanRow.stars,
-      ),
-      combineCICDDevops(
-        scorecardByCategory.get('cicd_devops') ?? null,
-        findScore('cicd_devops'),
-        applicability.cicd_devops,
-      ),
-      combineRepoSecurityPosture(
-        scorecardByCategory.get('repo_security_posture') ?? null,
-        manifest.hasSecurityPolicy,
-      ),
-      combineWorkflowSecurity(
-        scorecardByCategory.get('workflow_security') ?? null,
-        findScore('workflow_security'),
-        applicability.workflow_security,
-      ),
-    ];
-
-    const blendedCategories = new Set(blended.map((s) => s.category));
-    const nonBlended = categoryScores.filter((s) => !blendedCategories.has(s.category));
-    categoryScores.length = 0;
-    categoryScores.push(...nonBlended, ...blended);
-
-    if (!hasUsableCategoryData(categoryScores)) {
-      await db
-        .update(scans)
-        .set({
-          status: 'failed',
-          errorMessage: 'All security tools failed',
-          updatedAt: sql`NOW()`,
-        })
-        .where(eq(scans.id, scanId));
-      throw new UnrecoverableError('All security tools failed');
-    }
-
-    // Score repository_overview + aggregate (issue #16)
-    categoryScores.push(
-      scoreRepositoryOverview({
+    const pipelineResult: ScanPipelineResult = await runScanPipeline(
+      {
+        scanId,
+        repoOwner,
+        repoName,
+        defaultBranch,
+        sizeKb,
+        isPrivate: scanRow.isPrivate,
+        pushedAt: scanRow.pushedAt,
         stars: scanRow.stars,
-        sizeKb: job.data.sizeKb,
         language: scanRow.language,
         isFork: scanRow.isFork,
         description: scanRow.description,
-      }),
+      },
+      {
+        logger,
+        signal: abortController.signal,
+        onProgress: (pct) => job.updateProgress(pct),
+      },
     );
 
-    const result = computeOverallScore(categoryScores);
-
-    // tiny-repo gate: plugs the "50 asset files, zero code" hole where Lizard
-    // was skipped so NLOC is unknown
-    const tiny = isTinyRepo(
-      manifest.totalFiles,
-      manifest.supportedLanguageFiles,
-      lizardResult,
-      applicability.code_quality,
-    );
-    const showOnLeaderboard = result.leaderboardEligible && !tiny;
+    const { result, showOnLeaderboard, timings, fileCount, sizeKb: scannedSizeKb } = pipelineResult;
 
     await db.insert(scanCategories).values(
       result.categories.map((c) => ({
@@ -286,7 +113,6 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       })),
     );
 
-    // Update scan to completed
     await db
       .update(scans)
       .set({
@@ -298,18 +124,29 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       })
       .where(eq(scans.id, scanId));
 
-    await job.updateProgress(100);
-    logger.info('scan', 'scan completed', {
+    return {
+      timings,
       score: result.overallScore,
-      categories: result.categories.length,
-    });
+      applicableCount: result.applicableCount,
+      fileCount,
+      sizeKb: scannedSizeKb,
+    };
   } catch (err) {
-    // Don't update status if it's an UnrecoverableError (already handled)
     if (err instanceof UnrecoverableError) {
+      // Abort -> timeout. Any other unrecoverable failure (e.g. "All security
+      // tools failed") -> failed. clone.ts's write-then-throw cases re-write the
+      // same status/message here — an idempotent no-op, simpler than a flag.
+      if (abortController.signal.aborted) {
+        await markScanTimeout(scanId);
+      } else {
+        await db
+          .update(scans)
+          .set({ status: 'failed', errorMessage: err.message, updatedAt: sql`NOW()` })
+          .where(eq(scans.id, scanId));
+      }
       throw err;
     }
 
-    // Update scan to failed
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
     await db
       .update(scans)
@@ -321,13 +158,8 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       .where(eq(scans.id, scanId));
 
     logger.error('scan', 'scan failed', { errorMessage });
-    throw err; // Re-throw so BullMQ can retry
+    throw err;
   } finally {
     clearTimeout(timeoutId);
-    if (repoDir) {
-      await cleanupRepo(repoDir);
-    }
-
-    killAllToolProcesses();
   }
 }
