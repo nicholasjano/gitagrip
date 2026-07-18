@@ -75,6 +75,7 @@ export interface Scan {
   isFork: boolean;
   defaultBranch: string;
   language: string | null;
+  description: string | null;
   stars: number;
   sizeKb: number;
   status: ScanStatus;
@@ -93,6 +94,32 @@ export interface ScanCategory {
   category: ScanCategoryName;
   score: string;
   message: string;
+  applicable: boolean;
+}
+
+// ─── Scoring Tiers ───────────────────────────────────────────────
+
+export type ScoringTier = 'critical' | 'high' | 'standard';
+
+// single source of truth for tier membership (backend weights + frontend badges)
+export const CATEGORY_TIERS: Record<ScanCategoryName, ScoringTier> = {
+  exposed_secrets: 'critical',
+  security_vulnerabilities: 'critical',
+  container_security: 'critical',
+  workflow_security: 'critical',
+  repo_security_posture: 'critical',
+  dockerfile_best_practices: 'high',
+  iac_security: 'high',
+  dependency_health: 'high',
+  cicd_devops: 'high',
+  code_quality: 'standard',
+  maintenance_community: 'standard',
+  documentation_standards: 'standard',
+  repository_overview: 'standard',
+};
+
+export function tierForCategory(category: ScanCategoryName): ScoringTier {
+  return CATEGORY_TIERS[category];
 }
 
 // ─── Composite Types ─────────────────────────────────────────────

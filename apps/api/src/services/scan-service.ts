@@ -42,6 +42,7 @@ interface GitHubRepo {
   fork: boolean;
   default_branch: string;
   language: string | null;
+  description: string | null;
   stargazers_count: number;
   size: number;
   pushed_at: string;
@@ -202,6 +203,7 @@ export async function submitSingleScan(
           isFork: repo.fork,
           defaultBranch: repo.default_branch,
           language: repo.language,
+          description: repo.description,
           stars: repo.stargazers_count,
           sizeKb: repo.size,
           pushedAt: new Date(repo.pushed_at),
@@ -316,6 +318,7 @@ export async function submitBatchScan(
             isFork: repo.fork,
             defaultBranch: repo.default_branch,
             language: repo.language,
+            description: repo.description,
             stars: repo.stargazers_count,
             sizeKb: repo.size,
             pushedAt: new Date(repo.pushed_at),

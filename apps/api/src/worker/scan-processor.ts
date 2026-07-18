@@ -5,7 +5,7 @@ import type { Job } from 'bullmq';
 import { UnrecoverableError } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { scans } from '../db/schema.js';
+import { scanCategories, scans } from '../db/schema.js';
 import { createScanLogger } from '../scanner/logger.js';
 import { cloneRepo } from '../scanner/clone.js';
 import { detectFiles } from '../scanner/detect-files.js';
@@ -19,6 +19,8 @@ import {
   combineRepoSecurityPosture,
   combineWorkflowSecurity,
 } from '../scanner/scoring/scorecard-categories.js';
+import { computeOverallScore } from '../scanner/scoring/aggregate.js';
+import { isTinyRepo, scoreRepositoryOverview } from '../scanner/scoring/repo-overview.js';
 import { runCICDCheck } from '../scanner/tools/cicd-check.js';
 import { runDocsCheck } from '../scanner/tools/docs-check.js';
 import { runGitleaks } from '../scanner/tools/gitleaks.js';
@@ -99,6 +101,9 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
         isPrivate: scans.isPrivate,
         pushedAt: scans.pushedAt,
         stars: scans.stars,
+        language: scans.language,
+        isFork: scans.isFork,
+        description: scans.description,
       });
 
     if (updateResult.length === 0) {
@@ -156,21 +161,20 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       failureReason: 'skipped',
     });
 
+    let lizardResult: PartialToolScore | undefined;
+
     const phaseB = async () => {
       const runQualityTools = applicability.code_quality;
-      const [gitleaksScores, lizardResult, jscpdResult, docsScores, cicdScores] = await Promise.all(
-        [
-          runGitleaks(toolCtx),
-          runQualityTools ? runLizard(toolCtx) : Promise.resolve(skippedPartial()),
-          runQualityTools ? runJscpd(toolCtx) : Promise.resolve(skippedPartial()),
-          runDocsCheck({ ...toolCtx, manifest }),
-          runCICDCheck({ ...toolCtx, manifest, applicability }),
-        ],
-      );
+      const [gitleaksScores, lizard, jscpdResult, docsScores, cicdScores] = await Promise.all([
+        runGitleaks(toolCtx),
+        runQualityTools ? runLizard(toolCtx) : Promise.resolve(skippedPartial()),
+        runQualityTools ? runJscpd(toolCtx) : Promise.resolve(skippedPartial()),
+        runDocsCheck({ ...toolCtx, manifest }),
+        runCICDCheck({ ...toolCtx, manifest, applicability }),
+      ]);
+      lizardResult = lizard;
       categoryScores.push(...gitleaksScores);
-      categoryScores.push(
-        combineCodeQuality(lizardResult, jscpdResult, applicability.code_quality),
-      );
+      categoryScores.push(combineCodeQuality(lizard, jscpdResult, applicability.code_quality));
       categoryScores.push(...docsScores, ...cicdScores);
     };
 
@@ -249,24 +253,56 @@ export default async function scanProcessor(job: Job<ScanJobData>) {
       throw new UnrecoverableError('All security tools failed');
     }
 
-    // TODO (issue #16): aggregate CategoryScore[] from all tools, write scan_categories rows
-    logger.info('scan', 'category scores collected', {
-      categoryCount: categoryScores.length,
-    });
+    // Score repository_overview + aggregate (issue #16)
+    categoryScores.push(
+      scoreRepositoryOverview({
+        stars: scanRow.stars,
+        sizeKb: job.data.sizeKb,
+        language: scanRow.language,
+        isFork: scanRow.isFork,
+        description: scanRow.description,
+      }),
+    );
+
+    const result = computeOverallScore(categoryScores);
+
+    // tiny-repo gate: plugs the "50 asset files, zero code" hole where Lizard
+    // was skipped so NLOC is unknown
+    const tiny = isTinyRepo(
+      manifest.totalFiles,
+      manifest.supportedLanguageFiles,
+      lizardResult,
+      applicability.code_quality,
+    );
+    const showOnLeaderboard = result.leaderboardEligible && !tiny;
+
+    await db.insert(scanCategories).values(
+      result.categories.map((c) => ({
+        scanId,
+        category: c.category,
+        score: String(c.score),
+        message: c.message,
+        applicable: c.applicable,
+      })),
+    );
 
     // Update scan to completed
     await db
       .update(scans)
       .set({
         status: 'completed',
-        score: null,
+        score: result.overallScore,
+        showOnLeaderboard,
         completedAt: sql`NOW()`,
         updatedAt: sql`NOW()`,
       })
       .where(eq(scans.id, scanId));
 
     await job.updateProgress(100);
-    logger.info('scan', 'scan completed');
+    logger.info('scan', 'scan completed', {
+      score: result.overallScore,
+      categories: result.categories.length,
+    });
   } catch (err) {
     // Don't update status if it's an UnrecoverableError (already handled)
     if (err instanceof UnrecoverableError) {
