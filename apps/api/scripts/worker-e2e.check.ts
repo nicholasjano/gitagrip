@@ -13,54 +13,23 @@
 
 import assert from 'node:assert/strict';
 import { randomInt } from 'node:crypto';
-import { Worker, Queue, QueueEvents } from 'bullmq';
+import { type Worker, Queue, QueueEvents } from 'bullmq';
 import { eq } from 'drizzle-orm';
 import { db } from '../src/db/index.js';
 import { scans, scanCategories } from '../src/db/schema.js';
 import { bullRedis } from '../src/db/bull-redis.js';
+import { buildScanWorker } from '../src/worker/build-scan-worker.js';
+import { PHASE_KEYS, TOOL_KEYS } from '../src/scanner/run-scan.js';
 import type { ScanProcessorReturnValue } from '../src/worker/scan-processor.js';
-
-const PHASE_KEYS = [
-  'clone',
-  'detect',
-  'phaseA',
-  'phaseB',
-  'phaseC',
-  'phaseD',
-  'scoring',
-  'cleanup',
-];
-const TOOL_KEYS = [
-  'scorecard',
-  'gitleaks',
-  'lizard',
-  'jscpd',
-  'docsCheck',
-  'cicdCheck',
-  'trivy',
-  'opengrep',
-];
 
 const [, , repoArg, branchArg] = process.argv;
 const REPO = repoArg ?? 'sindresorhus/slugify';
 const BRANCH = branchArg ?? 'main';
 const [OWNER, NAME] = REPO.split('/');
 
-// mirrors benchmark.buildWorker / worker/index.ts (prod settings)
+// mirrors worker/index.ts (prod settings) via the shared factory
 function buildWorker(concurrency: number): Worker {
-  const ext = process.env.NODE_ENV === 'production' ? '.js' : '.ts';
-  return new Worker(
-    'github-scans',
-    new URL(`../src/worker/scan-processor${ext}`, import.meta.url).pathname,
-    {
-      connection: bullRedis,
-      concurrency,
-      lockDuration: 600000,
-      useWorkerThreads: true,
-      stalledInterval: 60000,
-      maxStalledCount: 2,
-    },
-  );
+  return buildScanWorker(concurrency);
 }
 
 async function main(): Promise<void> {

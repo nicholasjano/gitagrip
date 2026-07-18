@@ -8,6 +8,7 @@ import { db } from '../db/index.js';
 import { scans, scanBatches } from '../db/schema.js';
 import { scanQueue } from '../queue/scan-queue.js';
 import { cleanupRepo } from '../scanner/cleanup.js';
+import { buildScanWorker } from './build-scan-worker.js';
 
 // determine file extension based on environment
 const isProd = process.env.NODE_ENV === 'production';
@@ -37,18 +38,7 @@ try {
 }
 
 // Scan worker
-const scanWorker = new Worker(
-  'github-scans',
-  new URL(`./scan-processor${ext}`, import.meta.url).pathname,
-  {
-    connection: bullRedis,
-    concurrency: 3,
-    lockDuration: 600000,
-    useWorkerThreads: true,
-    stalledInterval: 60000,
-    maxStalledCount: 2,
-  },
-);
+const scanWorker = buildScanWorker(3);
 
 // Batch worker
 const batchWorker = new Worker(

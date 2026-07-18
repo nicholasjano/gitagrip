@@ -19,33 +19,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../src/db/index.js';
 import { scans, scanCategories } from '../src/db/schema.js';
 import { bullRedis } from '../src/db/bull-redis.js';
-
-const PHASE_KEYS = [
-  'clone',
-  'detect',
-  'phaseA',
-  'phaseB',
-  'phaseC',
-  'phaseD',
-  'scoring',
-  'cleanup',
-];
-const TOOL_KEYS = [
-  'scorecard',
-  'gitleaks',
-  'lizard',
-  'jscpd',
-  'docsCheck',
-  'cicdCheck',
-  'trivy',
-  'opengrep',
-];
-const SCORECARD_BLENDED = new Set([
-  'maintenance_community',
-  'cicd_devops',
-  'repo_security_posture',
-  'workflow_security',
-]);
+import { PHASE_KEYS, SCORECARD_BLENDED, TOOL_KEYS } from '../src/scanner/run-scan.js';
 
 const REPOS = process.argv.slice(2).filter((a) => !a.startsWith('-'));
 if (REPOS.length === 0) REPOS.push('sindresorhus/slugify', 'bridgecrewio/terragoat');
@@ -64,9 +38,16 @@ interface Meta {
   pushedAt: Date | null;
 }
 
+// same allowlist clone.ts uses before interpolating names into a URL
+const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+
 async function fetchMeta(repo: string): Promise<Meta> {
+  const [owner, name] = repo.split('/');
+  if (!owner || !name || !SAFE_NAME.test(owner) || !SAFE_NAME.test(name)) {
+    throw new Error(`Invalid repo "${repo}" — expected owner/name ([a-zA-Z0-9._-])`);
+  }
   const token = (process.env.SCORECARD_GITHUB_TOKENS ?? '').split(',')[0]?.trim();
-  const res = await fetch(`https://api.github.com/repos/${repo}`, {
+  const res = await fetch(`https://api.github.com/repos/${owner}/${name}`, {
     headers: {
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',

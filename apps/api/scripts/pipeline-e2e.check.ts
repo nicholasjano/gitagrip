@@ -18,40 +18,17 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import {
+  PHASE_KEYS,
+  SCORECARD_BLENDED,
+  TOOL_KEYS,
   runScanPipeline,
   type ScanInput,
   type ScanPipelineResult,
 } from '../src/scanner/run-scan.js';
 
 // Scorecard-blended categories vary with live GitHub API state — excluded from
-// the determinism check (mirrors benchmark.ts SCORECARD_BLENDED / issue #17).
-const DETERMINISM_EXCLUDE = new Set([
-  'maintenance_community',
-  'cicd_devops',
-  'repo_security_posture',
-  'workflow_security',
-]);
-
-const PHASE_KEYS = [
-  'clone',
-  'detect',
-  'phaseA',
-  'phaseB',
-  'phaseC',
-  'phaseD',
-  'scoring',
-  'cleanup',
-];
-const TOOL_KEYS = [
-  'scorecard',
-  'gitleaks',
-  'lizard',
-  'jscpd',
-  'docsCheck',
-  'cicdCheck',
-  'trivy',
-  'opengrep',
-];
+// the determinism check (imported from run-scan.ts, the single source).
+const DETERMINISM_EXCLUDE = SCORECARD_BLENDED;
 
 const [, , repoArg, branchArg] = process.argv;
 const REPO = repoArg ?? 'sindresorhus/slugify';

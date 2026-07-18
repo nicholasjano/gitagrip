@@ -133,9 +133,17 @@ export default async function scanProcessor(
     };
   } catch (err) {
     if (err instanceof UnrecoverableError) {
-      // timeout cases already had their status set inside the pipeline via signal
-      // — but markScanTimeout is no longer reachable here. Mark now if aborted.
-      if (abortController.signal.aborted) await markScanTimeout(scanId);
+      // Abort -> timeout. Any other unrecoverable failure (e.g. "All security
+      // tools failed") -> failed. clone.ts's write-then-throw cases re-write the
+      // same status/message here — an idempotent no-op, simpler than a flag.
+      if (abortController.signal.aborted) {
+        await markScanTimeout(scanId);
+      } else {
+        await db
+          .update(scans)
+          .set({ status: 'failed', errorMessage: err.message, updatedAt: sql`NOW()` })
+          .where(eq(scans.id, scanId));
+      }
       throw err;
     }
 

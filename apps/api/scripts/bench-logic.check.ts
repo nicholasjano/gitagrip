@@ -318,6 +318,62 @@ function run(): void {
     );
   }
 
+  // ── #5: >60% flag uses WALL time, not tool-time-sum ─────────────────────────
+  {
+    // trivy is 70% of tool-time (7000/10000) but only 35% of the 20s wall time
+    // (clone dominates). The flag must NOT fire — wall time is the denominator.
+    const cloneDominated = buildReport(
+      [
+        mkRepo({
+          repo: 'x/wall',
+          totalDurationMs: 20_000,
+          phases: { ...mkRepo({ repo: 'x' }).phases, clone: 12_000 },
+          tools: {
+            scorecard: 1000,
+            gitleaks: 1000,
+            lizard: 6000,
+            jscpd: 6000,
+            docsCheck: 0,
+            cicdCheck: 0,
+            trivy: 7000,
+            opengrep: 1000,
+          },
+        }),
+      ],
+      3,
+      1000,
+    );
+    assert.ok(
+      !cloneDominated.summary.recommendations.some((r) => /60%|of total scan time/i.test(r)),
+      'report: >60% flag uses wall time (clone-dominated scan not flagged)',
+    );
+    // ...and the inverse: 13s of a 20s wall is 65% -> must fire
+    const fires = buildReport(
+      [
+        mkRepo({
+          repo: 'x/wall2',
+          totalDurationMs: 20_000,
+          tools: {
+            scorecard: 1000,
+            gitleaks: 0,
+            lizard: 6000,
+            jscpd: 6000,
+            docsCheck: 0,
+            cicdCheck: 0,
+            trivy: 13_000,
+            opengrep: 0,
+          },
+        }),
+      ],
+      3,
+      1000,
+    );
+    assert.ok(
+      fires.summary.recommendations.some((r) => /of total scan time/i.test(r)),
+      'report: tool >60% of wall time flagged',
+    );
+  }
+
   // ── serverSpec ───────────────────────────────────────────────────────────────
   {
     const spec = serverSpec();

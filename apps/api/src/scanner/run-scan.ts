@@ -84,7 +84,7 @@ export interface ScanPipelineResult {
   sizeKb: number;
 }
 
-function emptyTimings(): ScanTimings {
+export function emptyTimings(): ScanTimings {
   return {
     phases: {
       clone: 0,
@@ -108,6 +108,19 @@ function emptyTimings(): ScanTimings {
     },
   };
 }
+
+// canonical key lists (single source for benchmark + temp e2e checks)
+export const PHASE_KEYS = Object.keys(emptyTimings().phases) as PhaseName[];
+export const TOOL_KEYS = Object.keys(emptyTimings().tools) as ToolName[];
+
+// Scorecard-blended categories vary with live GitHub API state — excluded from
+// determinism checks (issue #17). Shared by benchmark.ts + temp e2e checks.
+export const SCORECARD_BLENDED = new Set([
+  'maintenance_community',
+  'cicd_devops',
+  'repo_security_posture',
+  'workflow_security',
+]);
 
 export interface ScanPipelineContext {
   logger?: ScanLogger;

@@ -6,23 +6,25 @@
 // Usage:
 //   pnpm --filter @gitagrip/api benchmark -- --repos owner/repo,... --workers 3 --output report.json
 //
+// --workers N sets the primary load-test concurrency (pass c). Passes a/b run at
+// concurrency 1 (isolated timing baseline + determinism); pass d runs at N-1 for
+// the throughput-vs-memory comparison.
+//
 // Must run where the tool binaries, Postgres, and Redis are available (CX53 or
 // the worker Docker image). Pre-warm Trivy DB first:
 //   trivy image --download-db-only
 
-import { Worker, Queue, QueueEvents } from 'bullmq';
-import { and, eq, sql } from 'drizzle-orm';
+import { type Worker, Queue, QueueEvents } from 'bullmq';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { writeFileSync } from 'fs';
-import { execFile as execFileCb } from 'child_process';
-import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import os from 'os';
 import { db } from '../db/index.js';
-import { scanCategories, scans } from '../db/schema.js';
+import { scanCategories, scans, users } from '../db/schema.js';
 import { bullRedis } from '../db/bull-redis.js';
-import type { ScanTimings } from './run-scan.js';
-
-const execFile = promisify(execFileCb);
+import { buildScanWorker } from '../worker/build-scan-worker.js';
+import { emptyTimings, SCORECARD_BLENDED, type ScanTimings } from './run-scan.js';
+import { startRssSampler } from './rss-sampler.js';
 
 // ─── CLI args ────────────────────────────────────────────────────────────────
 
@@ -111,9 +113,17 @@ function pickScorecardToken(): string {
   return tokens[0]!;
 }
 
+// same allowlist clone.ts uses before interpolating names into a URL — keeps an
+// operator-supplied "foo/bar?x=y" from reaching an unintended endpoint.
+const SAFE_NAME = /^[a-zA-Z0-9._-]+$/;
+
 async function fetchRepoMetadata(repo: string): Promise<RepoMetadata> {
+  const [owner, name] = repo.split('/');
+  if (!owner || !name || !SAFE_NAME.test(owner) || !SAFE_NAME.test(name)) {
+    throw new Error(`Invalid repo "${repo}" — expected owner/name ([a-zA-Z0-9._-])`);
+  }
   const token = pickScorecardToken();
-  const res = await fetch(`https://api.github.com/repos/${repo}`, {
+  const res = await fetch(`https://api.github.com/repos/${owner}/${name}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',
@@ -149,104 +159,7 @@ async function fetchRepoMetadata(repo: string): Promise<RepoMetadata> {
   };
 }
 
-// ─── Process-tree RSS sampler ────────────────────────────────────────────────
-// BullMQ useWorkerThreads: true means worker threads + their tool child
-// processes are all descendants of one Node PID. process.memoryUsage().rss is
-// only the driver heap (massive undercount). We BFS descendants via ps and sum
-// rss. Linux-only; on darwin we fall back to the Node PID's own rss.
-
-interface RssSample {
-  treeRssKb: number;
-  nodeRssKb: number;
-}
-
-async function psLines(args: string[]): Promise<string[]> {
-  try {
-    const { stdout } = await execFile('ps', args);
-    return stdout.trim().split('\n').filter(Boolean);
-  } catch {
-    return [];
-  }
-}
-
-async function sampleTreeRss(rootPid: number): Promise<RssSample> {
-  const nodeRssKb = Math.round(process.memoryUsage().rss / 1024);
-
-  // darwin ps doesn't support -o pid=,ppid=,rss= -A; fall back to Node-only rss
-  if (process.platform === 'darwin') {
-    return { treeRssKb: nodeRssKb, nodeRssKb };
-  }
-
-  // BFS descendant PIDs from the root
-  const all = await psLines(['-o', 'pid=,ppid=', '-A']);
-  const childrenByPpid = new Map<number, number[]>();
-  for (const line of all) {
-    const [pidStr, ppidStr] = line.trim().split(/\s+/);
-    const pid = Number(pidStr);
-    const ppid = Number(ppidStr);
-    if (!Number.isFinite(pid) || !Number.isFinite(ppid)) continue;
-    const arr = childrenByPpid.get(ppid) ?? [];
-    arr.push(pid);
-    childrenByPpid.set(ppid, arr);
-  }
-
-  const pids: number[] = [rootPid];
-  const queue = [rootPid];
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
-    for (const child of childrenByPpid.get(cur) ?? []) {
-      pids.push(child);
-      queue.push(child);
-    }
-  }
-
-  if (pids.length === 0) return { treeRssKb: nodeRssKb, nodeRssKb };
-
-  // sum rss across the process tree
-  const { stdout } = await execFile('ps', ['-o', 'rss=', '-p', pids.join(',')]);
-  let treeRssKb = 0;
-  for (const line of stdout.trim().split('\n')) {
-    const kb = Number(line.trim());
-    if (Number.isFinite(kb)) treeRssKb += kb;
-  }
-  return { treeRssKb, nodeRssKb };
-}
-
-interface RssTracker {
-  peak: number;
-  reset: () => void;
-  stop: () => void;
-}
-
-// 2s sampler; updates `peak` with the max treeRssKb observed. reset() zeroes the
-// peak so the caller can measure a single repo's window (used in the sequential
-// pass for clean per-repo attribution).
-function startRssSampler(rootPid: number, intervalMs = 2000): RssTracker {
-  let peak = 0;
-  let stopped = false;
-  const timer = setInterval(async () => {
-    if (stopped) return;
-    try {
-      const sample = await sampleTreeRss(rootPid);
-      if (sample.treeRssKb > peak) peak = sample.treeRssKb;
-    } catch {
-      // ps transient errors — ignore, we keep the last peak
-    }
-  }, intervalMs);
-  timer.unref();
-  return {
-    get peak() {
-      return peak;
-    },
-    reset() {
-      peak = 0;
-    },
-    stop() {
-      stopped = true;
-      clearInterval(timer);
-    },
-  };
-}
+// RSS sampling lives in rss-sampler.ts (extracted per PR review — separable module).
 
 // ─── Scan row + job seeding ──────────────────────────────────────────────────
 
@@ -292,21 +205,9 @@ async function seedScanRow(meta: RepoMetadata, requestedBy: string): Promise<str
 }
 
 // Build a fresh worker at a given concurrency. Caller must close() it.
+// Delegates to the shared factory so the benchmark can't drift from prod options.
 function buildWorker(concurrency: number): Worker {
-  const isProd = process.env.NODE_ENV === 'production';
-  const ext = isProd ? '.js' : '.ts';
-  return new Worker(
-    'github-scans',
-    new URL(`../worker/scan-processor${ext}`, import.meta.url).pathname,
-    {
-      connection: bullRedis,
-      concurrency,
-      lockDuration: 600000,
-      useWorkerThreads: true,
-      stalledInterval: 60000,
-      maxStalledCount: 2,
-    },
-  );
+  return buildScanWorker(concurrency);
 }
 
 // ─── Run a single pass over N repos at a given concurrency ───────────────────
@@ -329,6 +230,8 @@ interface PassResult {
   results: PerRepoResult[];
   peakMemoryMb: number;
   totalWallMs: number;
+  /** per-repo category scores keyed by this pass's exact scanId (determinism diff) */
+  categoryScores: Map<string, Array<{ category: string; score: string }>>;
 }
 
 async function runPass(
@@ -339,6 +242,7 @@ async function runPass(
   userId: string,
   queueEvents: QueueEvents,
   isDeterminismPass: boolean,
+  seededScanIds: string[],
 ): Promise<PassResult> {
   const worker = buildWorker(concurrency);
   const queue = new Queue('github-scans', { connection: bullRedis });
@@ -351,6 +255,7 @@ async function runPass(
       const meta = metadata.get(r.repo);
       if (!meta) throw new Error(`no metadata for ${r.repo}`);
       const scanId = await seedScanRow(meta, userId);
+      seededScanIds.push(scanId);
 
       const job = await queue.add(
         'scan-repo',
@@ -410,6 +315,7 @@ async function runPass(
 
     // collect results as they finish
     const results: PerRepoResult[] = [];
+    const categoryScores = new Map<string, Array<{ category: string; score: string }>>();
     const passStart = Date.now();
 
     for (const s of seeded) {
@@ -433,6 +339,13 @@ async function runPass(
 
       const applicableCategories = categoryRows.filter((c) => c.applicable).length;
       const peakMemoryMb = Math.round((rssTracker.peak ?? 0) / 1024);
+
+      // thread the exact scanId-keyed scores out so the determinism diff doesn't
+      // have to re-query by a fragile "latest by createdAt" heuristic.
+      categoryScores.set(
+        s.repo,
+        categoryRows.map((c) => ({ category: c.category, score: c.score })),
+      );
 
       results.push({
         repo: s.repo,
@@ -460,6 +373,7 @@ async function runPass(
       results,
       peakMemoryMb: Math.round((rssTracker.peak ?? 0) / 1024),
       totalWallMs: Date.now() - passStart,
+      categoryScores,
     };
   } finally {
     rssTracker.stop();
@@ -468,41 +382,11 @@ async function runPass(
   }
 }
 
-function emptyTimings(): ScanTimings {
-  return {
-    phases: {
-      clone: 0,
-      detect: 0,
-      phaseA: 0,
-      phaseB: 0,
-      phaseC: 0,
-      phaseD: 0,
-      scoring: 0,
-      cleanup: 0,
-    },
-    tools: {
-      scorecard: 0,
-      gitleaks: 0,
-      lizard: 0,
-      jscpd: 0,
-      docsCheck: 0,
-      cicdCheck: 0,
-      trivy: 0,
-      opengrep: 0,
-    },
-  };
-}
-
 // ─── Determinism check ───────────────────────────────────────────────────────
 // Per #17: Scorecard-blended categories excluded (live API state), rest must
 // match across two runs. Any diff is a bug.
-
-export const SCORECARD_BLENDED = new Set([
-  'maintenance_community',
-  'cicd_devops',
-  'repo_security_posture',
-  'workflow_security',
-]);
+// SCORECARD_BLENDED is re-exported from run-scan.ts (single source of truth).
+export { SCORECARD_BLENDED };
 
 export interface DeterminismDiff {
   repo: string;
@@ -542,7 +426,9 @@ export interface BenchmarkReport {
   timestamp: string;
   serverSpec: string;
   workerCount: number;
+  /** load-test concurrency (pass c); per-repo rows below are measured at concurrency 1 */
   concurrencyPerWorker: number;
+  /** per-repo per-tool timings measured in isolation (concurrency 1) */
   repos: Array<{
     repo: string;
     sizeKb: number;
@@ -607,11 +493,14 @@ export function buildReport(
   // recommendations from the issue's thresholds
   const recommendations: string[] = [];
   for (const r of repos) {
-    const total = Object.values(r.tools).reduce((a, b) => a + b, 0);
+    // percent of total SCAN time (wall clock incl. clone/scoring/cleanup), not
+    // tool time — otherwise clone (which dominates wall time) isn't counted and
+    // the 60% flag over-fires. #17: "Tool > 60% of total scan time".
+    const scanMs = r.totalDurationMs;
     for (const [tool, ms] of Object.entries(r.tools)) {
-      if (total > 0 && ms / total > 0.6) {
+      if (scanMs > 0 && ms / scanMs > 0.6) {
         recommendations.push(
-          `${r.repo}: ${tool} is ${((ms / total) * 100).toFixed(0)}% of tool time — flag for skip/timeout reduction`,
+          `${r.repo}: ${tool} is ${((ms / scanMs) * 100).toFixed(0)}% of total scan time — flag for skip/timeout reduction`,
         );
       }
     }
@@ -744,6 +633,9 @@ async function main(): Promise<void> {
 
   const queueEvents = new QueueEvents('github-scans', { connection: bullRedis });
   const workerPid = process.pid;
+  // every scan row seeded across all 4 passes — deleted in finally so the
+  // benchmark leaves no fixture rows in whatever DATABASE_URL it pointed at.
+  const seededScanIds: string[] = [];
 
   try {
     // pass a: sequential (concurrency 1) — clean per-repo timings + peak RSS + run 1 scores
@@ -756,11 +648,11 @@ async function main(): Promise<void> {
       BENCHMARK_USER_ID,
       queueEvents,
       false,
+      seededScanIds,
     );
 
     // pass b: determinism run 2 (concurrency 1) — diff vs run 1
     process.stdout.write('\n[benchmark] pass b: concurrency=1 (determinism run 2)\n');
-    const categoryScoresRun1 = await collectCategoryScores(pass1.results.map((r) => r.repo));
     const pass2 = await runPass(
       repos,
       metadata,
@@ -769,13 +661,13 @@ async function main(): Promise<void> {
       BENCHMARK_USER_ID,
       queueEvents,
       true,
+      seededScanIds,
     );
-    const categoryScoresRun2 = await collectCategoryScores(pass2.results.map((r) => r.repo));
     const diffs = diffDeterminism(
       pass1.results,
       pass2.results,
-      categoryScoresRun1,
-      categoryScoresRun2,
+      pass1.categoryScores,
+      pass2.categoryScores,
     );
     if (diffs.length > 0) {
       process.stdout.write(
@@ -791,35 +683,39 @@ async function main(): Promise<void> {
       process.stdout.write('\n[determinism] PASS — deterministic subset identical across runs\n');
     }
 
-    // pass c: concurrent @ 3 — throughput + aggregate peak RSS + OOM watch
-    process.stdout.write('\n[benchmark] pass c: concurrency=3 (load test)\n');
+    // pass c: concurrent @ args.workers — throughput + aggregate peak RSS + OOM watch
+    const primaryWorkers = args.workers;
+    const secondaryWorkers = Math.max(1, primaryWorkers - 1);
+    process.stdout.write(`\n[benchmark] pass c: concurrency=${primaryWorkers} (load test)\n`);
     const pass3 = await runPass(
       repos,
       metadata,
-      3,
+      primaryWorkers,
       workerPid,
       BENCHMARK_USER_ID,
       queueEvents,
       false,
+      seededScanIds,
     );
 
-    // pass d: concurrent @ 2 — throughput vs memory comparison
-    process.stdout.write('\n[benchmark] pass d: concurrency=2 (load test)\n');
+    // pass d: concurrent @ (workers - 1) — throughput vs memory comparison
+    process.stdout.write(`\n[benchmark] pass d: concurrency=${secondaryWorkers} (load test)\n`);
     const pass4 = await runPass(
       repos,
       metadata,
-      2,
+      secondaryWorkers,
       workerPid,
       BENCHMARK_USER_ID,
       queueEvents,
       false,
+      seededScanIds,
     );
 
     // Per-repo rows come from the sequential pass (isolated, contention-free
     // per-tool timing + clean per-repo peak); summary peak RSS is the worst case
     // across the concurrent passes (the figure that drives the 5 GB decision).
     const summaryPeakMemoryMb = Math.max(pass3.peakMemoryMb, pass4.peakMemoryMb);
-    const report = buildReport(pass1.results, args.workers, summaryPeakMemoryMb);
+    const report = buildReport(pass1.results, primaryWorkers, summaryPeakMemoryMb);
     writeFileSync(args.output, JSON.stringify(report, null, 2));
     process.stdout.write(`\n[benchmark] wrote ${args.output}\n`);
     printStdoutTable(report, new Map(repos.map((r) => [r.repo, r.tier])));
@@ -827,43 +723,32 @@ async function main(): Promise<void> {
     // throughput comparison for the human
     process.stdout.write(`\nThroughput:\n`);
     process.stdout.write(
-      `  concurrency=3: ${(pass3.totalWallMs / 1000).toFixed(1)}s wall, peak ${pass3.peakMemoryMb}MB\n`,
+      `  concurrency=${primaryWorkers}: ${(pass3.totalWallMs / 1000).toFixed(1)}s wall, peak ${pass3.peakMemoryMb}MB\n`,
     );
     process.stdout.write(
-      `  concurrency=2: ${(pass4.totalWallMs / 1000).toFixed(1)}s wall, peak ${pass4.peakMemoryMb}MB\n`,
+      `  concurrency=${secondaryWorkers}: ${(pass4.totalWallMs / 1000).toFixed(1)}s wall, peak ${pass4.peakMemoryMb}MB\n`,
     );
   } finally {
+    // remove fixture rows: scan_categories cascades on scans delete; the stable
+    // benchmark user (github_id=0) is dropped too so no phantom row persists.
+    if (seededScanIds.length > 0) {
+      await db
+        .delete(scans)
+        .where(inArray(scans.id, seededScanIds))
+        .catch((err) => {
+          process.stderr.write(
+            `[benchmark] fixture scan cleanup failed: ${(err as Error).message}\n`,
+          );
+        });
+    }
+    await db
+      .delete(users)
+      .where(eq(users.id, BENCHMARK_USER_ID))
+      .catch(() => undefined); // user may not have been upserted; best-effort
     await queueEvents.close();
     await bullRedis.quit();
     await db.$client.end();
   }
-}
-
-async function collectCategoryScores(
-  repoNames: string[],
-): Promise<Map<string, Array<{ category: string; score: string }>>> {
-  // map repo -> latest scan's category rows. Since each pass freshly seeds a
-  // new scan row, "latest by createdAt" picks the most recent run.
-  const out = new Map<string, Array<{ category: string; score: string }>>();
-  for (const repo of repoNames) {
-    const [owner, name] = repo.split('/');
-    const [latestScan] = await db
-      .select({ id: scans.id })
-      .from(scans)
-      .where(and(eq(scans.repoOwner, owner!), eq(scans.repoName, name!)))
-      .orderBy(sql`${scans.createdAt} DESC`)
-      .limit(1);
-    if (!latestScan) continue;
-    const rows = await db
-      .select({ category: scanCategories.category, score: scanCategories.score })
-      .from(scanCategories)
-      .where(eq(scanCategories.scanId, latestScan.id));
-    out.set(
-      repo,
-      rows.map((r) => ({ category: r.category, score: r.score })),
-    );
-  }
-  return out;
 }
 
 // Only auto-run when invoked directly (tsx src/scanner/benchmark.ts), not when
